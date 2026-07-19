@@ -87,7 +87,7 @@ const StradarioSchema = new mongoose.Schema({
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
 /* ==========================================
-   4. MODELLO CONCORRENZA MANUALE ED EXCEL
+   4. MODELLO CONCORRENZA MANUALE ED EXCEL (PULITA)
 ========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
