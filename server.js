@@ -84,7 +84,7 @@ const StradarioSchema = new mongoose.Schema({
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
 /* ==========================================
-   ROTTE API INTERNE & AUTENTICAZIONE
+   ROTTE API INTERNE & LOGIN
 ========================================== */
 app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Backend attivo' }));
 
@@ -146,9 +146,8 @@ app.post('/api/oby-budget', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API SPECIFICHE STRADARIO CLOUD
+   ROTTE API STRADARIO CLOUD (CON IL TUO ELENCO DI 20 COMUNI)
 ========================================== */
-// Ottiene lo stradario completo o lo inizializza se vuoto
 app.get('/api/stradario', async (req, res) => {
   try {
     let elenco = await Stradario.find({}).sort({ comune: 1 });
@@ -182,7 +181,6 @@ app.get('/api/stradario', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Salva o aggiorna l'intero record di un comune (Aggiunta vie, civici, citofoni)
 app.put('/api/stradario/:comuneId', async (req, res) => {
   try {
     const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: { vie: req.body.vie } }, { new: true });
@@ -190,7 +188,6 @@ app.put('/api/stradario/:comuneId', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// Aggiunge un nuovo comune personalizzato da zero
 app.post('/api/stradario/nuovo-comune', async (req, res) => {
   try {
     const nuovo = new Stradario(req.body);
