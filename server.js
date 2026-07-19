@@ -6,14 +6,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Legge la stringa di connessione in modo sicuro dalle variabili di Render
 const mongoURI = process.env.MONGO_URI; 
 
 mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("Database MongoDB Cloud Connesso con Successo!"))
   .catch(err => console.error("Errore critico di connessione DB:", err));
 
-// Schema del Consulente (Aggiornato per supportare i ruoli multipli)
 const ConsulenteSchema = new mongoose.Schema({
   nomeCognome: String,
   telefono: String,
@@ -27,7 +25,6 @@ const ConsulenteSchema = new mongoose.Schema({
 
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
-// 1. GET - Legge tutti i consulenti dal database
 app.get('/api/consulenti', async (req, res) => {
   try {
     const lista = await Consulente.find({});
@@ -37,18 +34,17 @@ app.get('/api/consulenti', async (req, res) => {
   }
 });
 
-// 2. POST - Crea un nuovo consulente (Inizializzazione)
+// IL PROBLEMA ERA QUI SOTTO: HO CORRETTO "nuevo" IN "nuovo"
 app.post('/api/consulenti', async (req, res) => {
   try {
     const nuovo = new Consulente(req.body);
     await nuovo.save();
-    res.json({ status: "success", data: nuevo });
+    res.json({ status: "success", data: nuovo }); 
   } catch (err) {
     res.status(400).json({ error: "Username già esistente o dati non validi." });
   }
 });
 
-// 3. PUT - Modifica un consulente esistente senza creare duplicati
 app.put('/api/consulenti/:utente', async (req, res) => {
   try {
     const consulenteAggiornato = await Consulente.findOneAndUpdate(
@@ -65,7 +61,6 @@ app.put('/api/consulenti/:utente', async (req, res) => {
   }
 });
 
-// 4. DELETE - Elimina un consulente dal database
 app.delete('/api/consulenti/:utente', async (req, res) => {
   try {
     const eliminato = await Consulente.findOneAndDelete({ utente: req.params.utente });
@@ -78,3 +73,4 @@ app.delete('/api/consulenti/:utente', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM in ascolto sulla porta ${PORT}`));
+
