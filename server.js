@@ -49,6 +49,25 @@ const TodoSchema = new mongoose.Schema(
 const Todo = mongoose.model('Todo', TodoSchema);
 
 /* ==========================================
+   MODELLO 3: SETTAGGIO OBY (TARGET BUDGET)
+========================================== */
+const ObyBudgetSchema = new mongoose.Schema(
+  {
+    consulente: { type: String, required: true, unique: true },
+    percentualeProvvigione: { type: Number, default: 40 },
+    guadagnoNettoDesiderato: { type: Number, default: 30000 },
+    lordoFatturareAgenzia: { type: Number, default: 75000 },
+    immobiliDaVendere: { type: Number, default: 0 },
+    immobiliDaAcquisire: { type: Number, default: 0 },
+    cdv2Necessarie: { type: Number, default: 0 },
+    cdv1Necessarie: { type: Number, default: 0 },
+    notizieNecessarie: { type: Number, default: 0 }
+  },
+  { timestamps: true }
+);
+const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
+
+/* ==========================================
    ROTTE API: GENERALI & LOGIN
 ========================================== */
 app.get('/', (req, res) => {
@@ -86,105 +105,87 @@ app.get('/api/consulenti', async (req, res) => {
   try {
     const lista = await Consulente.find({}).sort({ nomeCognome: 1 });
     res.status(200).json(lista);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/consulenti', async (req, res) => {
   try {
-    if (!req.body.utente || req.body.utente.trim() === "") {
-      return res.status(400).json({ error: "Il campo Nome Utente è obbligatorio!" });
-    }
+    if (!req.body.utente || req.body.utente.trim() === "") return res.status(400).json({ error: "Utente obbligatorio" });
     const nuovo = new Consulente({
-      nomeCognome: req.body.nomeCognome || '',
-      telefono: req.body.telefono || '',
-      mail: req.body.mail || '',
-      idTelegram: req.body.idTelegram || '',
-      idWhatsapp: req.body.idWhatsapp || '',
-      utente: req.body.utente.trim().toLowerCase(),
-      pass: req.body.pass || '',
-      ruolo: req.body.ruolo || 'LISTING AGENT'
+      nomeCognome: req.body.nomeCognome || '', telefono: req.body.telefono || '', mail: req.body.mail || '',
+      idTelegram: req.body.idTelegram || '', idWhatsapp: req.body.idWhatsapp || '', utente: req.body.utente.trim().toLowerCase(), pass: req.body.pass || '', ruolo: req.body.ruolo || 'LISTING AGENT'
     });
     const salvato = await nuovo.save();
     res.status(201).json({ status: 'success', data: salvato });
-  } catch (err) {
-    if (err.code === 11000) return res.status(400).json({ error: 'Username già esistente.' });
-    res.status(400).json({ error: err.message });
-  }
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.put('/api/consulenti/:utente', async (req, res) => {
   try {
-    const datiDaAggiornare = {
-      nomeCognome: req.body.nomeCognome, telefono: req.body.telefono, mail: req.body.mail,
-      idTelegram: req.body.idTelegram, idWhatsapp: req.body.idWhatsapp, pass: req.body.pass, ruolo: req.body.ruolo
-    };
     const aggiornato = await Consulente.findOneAndUpdate(
       { utente: req.params.utente.trim().toLowerCase() },
-      { $set: datiDaAggiornare },
-      { new: true, runValidators: true }
+      { $set: req.body },
+      { new: true }
     );
-    if (!aggiornato) return res.status(404).json({ error: 'Consulente non trovato' });
     res.status(200).json({ status: 'success', data: aggiornato });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.delete('/api/consulenti/:utente', async (req, res) => {
   try {
-    const eliminato = await Consulente.findOneAndDelete({ utente: req.params.utente.trim().toLowerCase() });
-    if (!eliminato) return res.status(404).json({ error: 'Consulente non trovato' });
-    res.status(200).json({ status: 'success', message: 'Consulente eliminato' });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    await Consulente.findOneAndDelete({ utente: req.params.utente.trim().toLowerCase() });
+    res.status(200).json({ status: 'success', message: 'Eliminato' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /* ==========================================
-   ROTTE API: TO DO LIST (LIVE CLOUD)
+   ROTTE API: TO DO LIST
 ========================================== */
-// Legge tutti i task salvati
 app.get('/api/todo', async (req, res) => {
   try {
     const lista = await Todo.find({}).sort({ createdAt: -1 });
     res.status(200).json(lista);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Crea un nuovo task
 app.post('/api/todo', async (req, res) => {
   try {
-    const nuovo = new Todo({
-      data: req.body.data,
-      task: req.body.task,
-      consulente: req.body.consulente,
-      stato: req.body.stato || 'Attivo',
-      note: req.body.note || ''
-    });
+    const nuovo = new Todo(req.body);
     const salvato = await nuovo.save();
     res.status(201).json({ status: 'success', data: salvato });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// Modifica lo stato o i dati di un task esistente tramite ID
 app.put('/api/todo/:id', async (req, res) => {
   try {
-    const aggiornato = await Todo.findByIdAndUpdate(
-      req.params.id,
-      { $set: req.body },
-      { new: true }
-    );
-    if (!aggiornato) return res.status(404).json({ error: 'Task non trovato' });
+    const aggiornato = await Todo.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
     res.status(200).json({ status: 'success', data: aggiornato });
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: OBY BUDGET (LIVE CALCOLO FUNNEL)
+========================================== */
+app.get('/api/oby-budget/:consulente', async (req, res) => {
+  try {
+    let budget = await ObyBudget.findOne({ consulente: req.params.consulente });
+    if (!budget) {
+      budget = { consulente: req.params.consulente, percentualeProvvigione: 40, guadagnoNettoDesiderato: 30000, lordoFatturareAgenzia: 75000, immobiliDaVendere: 9, immobiliDaAcquisire: 13, cdv2Necessarie: 44, cdv1Necessarie: 63, notizieNecessarie: 210 };
+    }
+    res.status(200).json(budget);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/oby-budget', async (req, res) => {
+  try {
+    const { consulente } = req.body;
+    const aggiornato = await ObyBudget.findOneAndUpdate(
+      { consulente },
+      { $set: req.body },
+      { new: true, upsert: true }
+    );
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
