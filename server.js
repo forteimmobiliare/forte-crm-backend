@@ -58,7 +58,7 @@ const ObyBudgetSchema = new mongoose.Schema({
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
 /* ==========================================
-   3. MODELLO STRADARIO LIVE CLOUD E COPERTURA (AGGIORNATO)
+   3. MODELLO STRADARIO LIVE CLOUD E COPERTURA
 ========================================== */
 const StradarioSchema = new mongoose.Schema({
   comune: { type: String, required: true, unique: true },
@@ -82,11 +82,13 @@ const StradarioSchema = new mongoose.Schema({
               sub: { type: String, default: '' },
               mq: { type: String, default: '' },
               nomeCognomeCf: { type: String, default: '' },
-              nomeCognomeAnno: { type: String, default: '' }
+              nomeCognomeAnno: { type: String, default: '' },
+              proprietarioCollegatoId: { type: String, default: '' } // Campo per salvare il collegamento alla tendina
             }
           ],
           proprietariNonResidenti: [
             {
+              _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() }, // Genera un ID per l'aggancio
               piano: { type: String, default: '' },
               vani: { type: String, default: '' },
               sub: { type: String, default: '' },
@@ -103,7 +105,7 @@ const StradarioSchema = new mongoose.Schema({
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
 /* ==========================================
-   4. MODELLO CONCORRENZA MANUALE ED EXCEL (PULITA)
+   4. MODELLO CONCORRENZA MANUALE ED EXCEL
 ========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
@@ -210,7 +212,7 @@ app.post('/api/oby-budget', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: STRADARIO CLOUD COMPLETO (CON TUTTI I TUOI COMUNI INIZIALI)
+   ROTTE API: STRADARIO CLOUD COMPLETO
 ========================================== */
 app.get('/api/stradario', async (req, res) => {
   try {
@@ -257,7 +259,7 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CONCORRENZA MANUALE ED EXCEL (CON ELIMINAZIONE)
+   ROTTE API: CONCORRENZA MANUALE ED EXCEL
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
