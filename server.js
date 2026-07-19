@@ -4,16 +4,27 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
+// Ottimizzato per ricevere grossi file Excel mappati in JSON dal frontend
 app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
   console.error('ERRORE CRITICO: La variabile MONGO_URI non è configurata su Render!');
+  process.exit(1); // Blocca l'app prima che generi crash a catena indesiderati
 }
 
 mongoose.connect(mongoURI)
   .then(() => console.log('Database MongoDB Cloud Connesso con Successo!'))
-  .catch((err) => console.error('Errore critico di connessione DB:', err));
+  .catch((err) => {
+    console.error('Errore critico di connessione iniziale DB:', err);
+    process.exit(1);
+  });
+
+// Gestione disconnessioni impreviste del database durante il runtime
+mongoose.connection.on('error', err => {
+  console.error('Errore persistente nel database MongoDB:', err);
+});
 
 /* ==========================================
    1. MODELLI DATABASE CORE (CONSULENTI & TASK)
@@ -114,6 +125,8 @@ app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Bac
 app.post('/api/login', async (req, res) => {
   try {
     const { utente, pass } = req.body;
+    if (!utente || !pass) return res.status(400).json({ error: 'Campi utente e password obbligatori' });
+
     if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
       return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin", areeVisibili: [], consulentiVisibili: [] } });
     }
@@ -147,7 +160,6 @@ app.delete('/api/consulenti/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// AGGIORNA I PERMESSI (AREE VISIBILI + CONSULENTI VISIBILI) DI UN CONSULENTE
 app.put('/api/consulenti/:id/permessi', async (req, res) => {
   try {
     const { areeVisibili, consulentiVisibili } = req.body;
@@ -197,7 +209,7 @@ app.post('/api/oby-budget', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: STRADARIO CLOUD COMPLETO (CON ELIMINAZIONE COMUNE)
+   ROTTE API: STRADARIO CLOUD COMPLETO
 ========================================== */
 app.get('/api/stradario', async (req, res) => {
   try {
@@ -244,7 +256,7 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CONCORRENZA MANUALE ED EXCEL (CON ELIMINAZIONE)
+   ROTTE API: CONCORRENZA MANUALE ED EXCEL
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
