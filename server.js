@@ -1,7 +1,6 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const cron = require('node-cron');
 const app = express();
 
 app.use(cors());
@@ -17,7 +16,7 @@ mongoose.connect(mongoURI)
   .catch((err) => console.error('Errore critico di connessione DB:', err));
 
 /* ==========================================
-   MODELLI DATABASE CORE & STRADARIO
+   MODELLI DATABASE CORE
 ========================================== */
 const ConsulenteSchema = new mongoose.Schema({
   nomeCognome: { type: String, required: true },
@@ -53,6 +52,27 @@ const ObyBudgetSchema = new mongoose.Schema({
 }, { timestamps: true });
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
+/* ==========================================
+   MODELLO CONCORRENZA LIVE CLOUD
+========================================== */
+const ConcorrenzaSchema = new mongoose.Schema({
+  titolo: { type: String, required: true },
+  paeseVia: { type: String, required: true },
+  civico: { type: String, default: 'N.D.' },
+  contesto: { type: String, default: 'Residenziale' },
+  unita: { type: String, default: 'Appartamento' },
+  piano: { type: String, default: 'Intermedio' },
+  bagni: { type: String, default: '1' },
+  prezzo: { type: String, required: true },
+  agenzia: { type: String, default: 'Concorrente' },
+  dataAnnuncio: { type: String, default: '19/07/2026' },
+  link: { type: String, default: '' }
+}, { timestamps: true });
+const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
+
+/* ==========================================
+   MODELLO STRADARIO LIVE CLOUD
+========================================== */
 const StradarioSchema = new mongoose.Schema({
   comune: { type: String, required: true, unique: true },
   provincia: { type: String, default: 'MI' },
@@ -82,25 +102,7 @@ const StradarioSchema = new mongoose.Schema({
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
 /* ==========================================
-   MODELLO LIVE CONCORRENZA CLOUD
-========================================== */
-const ConcorrenzaSchema = new mongoose.Schema({
-  titolo: { type: String, required: true },
-  paeseVia: { type: String, required: true },
-  civico: { type: String, default: 'N.D.' },
-  contesto: { type: String, default: 'Residenziale' },
-  unita: { type: String, default: 'Appartamento' },
-  piano: { type: String, default: 'Intermedio' },
-  bagni: { type: String, default: '1' },
-  prezzo: { type: String, required: true },
-  agenzia: { type: String, default: 'Concorrente' },
-  dataAnnuncio: { type: String, default: '19/07/2026' },
-  link: { type: String, default: '' }
-}, { timestamps: true });
-const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
-
-/* ==========================================
-   ROTTE API CORE & AUTENTICAZIONE
+   ROTTE API INTERNE & LOGIN
 ========================================== */
 app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Backend attivo' }));
 
@@ -111,7 +113,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin" } });
     }
     const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
-    if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
+    if (!consultant = consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
     const datiSenzaPassword = consulente.toObject();
     delete datiSenzaPassword.pass;
     res.status(200).json({ status: 'success', data: datiSenzaPassword });
@@ -129,6 +131,14 @@ app.post('/api/consulenti', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.put('/api/consulenti/:utente', async (req, res) => {
+  try { res.status(200).json({ status: 'success', data: await Consulente.findOneAndUpdate({ utente: req.params.utente.trim().toLowerCase() }, { $set: req.body }, { new: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/consulenti/:utente', async (req, res) => {
+  try { await Consulente.findOneAndDelete({ utente: req.params.utente.trim().toLowerCase() }); res.status(200).json({ status: 'success' }); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/todo', async (req, res) => {
   try { res.status(200).json(await Todo.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -144,7 +154,7 @@ app.put('/api/todo/:id', async (req, res) => {
 app.get('/api/oby-budget/:consulente', async (req, res) => {
   try {
     let b = await ObyBudget.findOne({ consulente: req.params.consulente });
-    if (!b) b = { consulente: req.params.consulente, percentualeProvvigione: 40, guadagnoNettoDesiderato: 30000, lordoFatturareAgenzia: 75000, immobiliDaVendere: 9, immobiliDaAcquisire: 13 };
+    if (!b) b = { consulente: req.params.consulente, percentualeProvvigione: 40, guadagnoNettoDesiderato: 30000, lordoFatturareAgenzia: 75000, immobiliDaVendere: 9, immobiliDaAcquisire: 13, cdv2Necessarie: 44, cdv1Necessarie: 63, notizieNecessarie: 210 };
     res.status(200).json(b);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -154,56 +164,7 @@ app.post('/api/oby-budget', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE STRADARIO & COPERTURA
-========================================== */
-app.get('/api/stradario', async (req, res) => {
-  try {
-    let elenco = await Stradario.find({}).sort({ comune: 1 });
-    if (elenco.length === 0) {
-      const initComuni = [
-        { comune: "Legnano", provincia: "MI", abitanti: "61.271", subalterniTotali: 32500, vie: [] },
-        { comune: "Canegrate", provincia: "MI", abitanti: "12.500", subalterniTotali: 6100, vie: [] },
-        { comune: "San Giorgio su Legnano", provincia: "MI", abitanti: "6.700", subalterniTotali: 3100, vie: [] },
-        { comune: "San Vittore Olona", provincia: "MI", abitanti: "8.300", subalterniTotali: 4100, vie: [] },
-        { comune: "Cerro Maggiore", provincia: "MI", abitanti: "15.200", subalterniTotali: 7400, vie: [] },
-        { comune: "Rescaldina", provincia: "MI", abitanti: "14.100", subalterniTotali: 6800, vie: [] },
-        { comune: "Uboldo", provincia: "VA", abitanti: "10.600", subalterniTotali: 4900, vie: [] },
-        { comune: "Origgio", provincia: "VA", abitanti: "7.800", subalterniTotali: 3500, vie: [] },
-        { comune: "Saronno", provincia: "VA", abitanti: "38.600", subalterniTotali: 19800, vie: [] },
-        { comune: "Gerenzano", provincia: "VA", abitanti: "10.900", subalterniTotali: 5100, vie: [] },
-        { comune: "Cislago", provincia: "VA", abitanti: "10.400", subalterniTotali: 4800, vie: [] },
-        { comune: "Turate", provincia: "CO", abitanti: "9.500", subalterniTotali: 4300, vie: [] },
-        { comune: "Limido Comasco", provincia: "CO", abitanti: "3.800", subalterniTotali: 1700, vie: [] },
-        { comune: "Villa Cortese", provincia: "MI", abitanti: "6.200", subalterniTotali: 2900, vie: [] },
-        { comune: "Busto Arsizio", provincia: "VA", abitanti: "82.950", subalterniTotali: 41200, vie: [] },
-        { comune: "Castellanza", provincia: "VA", abitanti: "14.300", subalterniTotali: 6900, vie: [] },
-        { comune: "Olgiate Olona", provincia: "VA", abitanti: "12.400", subalterniTotali: 5800, vie: [] },
-        { comune: "Gallarate", provincia: "VA", abitanti: "52.840", subalterniTotali: 28400, vie: [] },
-        { comune: "Samarate", provincia: "VA", abitanti: "16.020", subalterniTotali: 8100, vie: [] },
-        { comune: "Ferno", provincia: "VA", abitanti: "6.800", subalterniTotali: 3100, vie: [] }
-      ];
-      await Stradario.insertMany(initComuni);
-      elenco = await Stradario.find({}).sort({ comune: 1 });
-    }
-    res.status(200).json(elenco);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.put('/api/stradario/:comuneId', async (req, res) => {
-  try { res.status(200).json(await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: { vie: req.body.vie } }, { new: true })); } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.post('/api/stradario/nuovo-comune', async (req, res) => {
-  try {
-    const esiste = await Stradario.findOne({ comune: req.body.comune });
-    if(esiste) return res.status(400).json({ error: "Comune già presente!" });
-    const nuovo = new Stradario(req.body);
-    res.status(201).json({ status: 'success', data: await nuovo.save() });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-/* ==========================================
-   ROTTE API: CONCORRENZA LIVE CLOUD PROVENIENTE DA PORTALE
+   ROTTE API: CONCORRENZA E ARCHIVIO IMMOBILI MOZZATE
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
@@ -240,9 +201,43 @@ app.post('/api/concorrenza', async (req, res) => {
   try { const nuovo = new Concorrenza(req.body); res.status(201).json(await nuovo.save()); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-/* AUTOMAZIONE TIMER ATTIVA OGNI LUNEDÌ ALLE 08:00 AM */
-cron.schedule('0 8 * * 1', async () => {
-  console.log("Timer Attivo: Scansione settimanale dei portali in esecuzione...");
+/* ==========================================
+   ROTTE API STRADARIO CLOUD COMPLETO
+========================================== */
+app.get('/api/stradario', async (req, res) => {
+  try {
+    let elenco = await Stradario.find({}).sort({ comune: 1 });
+    if (elenco.length === 0) {
+      const initComuni = [
+        { comune: "Legnano", provincia: "MI", abitanti: "61.271", subalterniTotali: 32500, vie: [] },
+        { comune: "Canegrate", provincia: "MI", abitanti: "12.500", subalterniTotali: 6100, vie: [] },
+        { comune: "San Giorgio su Legnano", provincia: "MI", abitanti: "6.700", subalterniTotali: 3100, vie: [] },
+        { comune: "San Vittore Olona", provincia: "MI", abitanti: "8.300", subalterniTotali: 4100, vie: [] },
+        { comune: "Cerro Maggiore", provincia: "MI", abitanti: "15.200", subalterniTotali: 7400, vie: [] },
+        { comune: "Rescaldina", provincia: "MI", abitanti: "14.100", subalterniTotali: 6800, vie: [] },
+        { comune: "Saronno", provincia: "VA", abitanti: "38.600", subalterniTotali: 19800, vie: [] }
+      ];
+      await Stradario.insertMany(initComuni);
+      elenco = await Stradario.find({}).sort({ comune: 1 });
+    }
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/stradario/:comuneId', async (req, res) => {
+  try {
+    const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: { vie: req.body.vie } }, { new: true });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/stradario/nuovo-comune', async (req, res) => {
+  try {
+    const esiste = await Stradario.findOne({ comune: req.body.comune });
+    if(esiste) return res.status(400).json({ error: "Questo comune è già presente!" });
+    const nuovo = new Stradario(req.body);
+    res.status(201).json({ status: 'success', data: await nuovo.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
