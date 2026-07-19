@@ -16,7 +16,7 @@ mongoose.connect(mongoURI)
   .catch((err) => console.error('Errore critico di connessione DB:', err));
 
 /* ==========================================
-   MODELLI DATABASE
+   MODELLI DATABASE CORE
 ========================================== */
 const ConsulenteSchema = new mongoose.Schema({
   nomeCognome: { type: String, required: true },
@@ -53,7 +53,38 @@ const ObyBudgetSchema = new mongoose.Schema({
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
 /* ==========================================
-   ROTTE API INTERNE
+   MODELLO STRADARIO LIVE CLOUD
+========================================== */
+const StradarioSchema = new mongoose.Schema({
+  comune: { type: String, required: true, unique: true },
+  provincia: { type: String, default: 'MI' },
+  abitanti: { type: String, default: 'N.D.' },
+  subalterniTotali: { type: Number, default: 5000 },
+  vie: [
+    {
+      nome: { type: String, required: true },
+      zone: { type: String, default: 'CENTRO' },
+      civici: [
+        {
+          numero: { type: String, required: true },
+          note: { type: String, default: '' },
+          citofoni: [
+            {
+              nome: { type: String, default: '' },
+              stato: { type: String, default: 'Proprietario' },
+              consulenteIncaricato: { type: String, default: '' },
+              info: { type: String, default: '' }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}, { timestamps: true });
+const Stradario = mongoose.model('Stradario', StradarioSchema);
+
+/* ==========================================
+   ROTTE API INTERNE & AUTENTICAZIONE
 ========================================== */
 app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Backend attivo' }));
 
@@ -112,6 +143,59 @@ app.get('/api/oby-budget/:consulente', async (req, res) => {
 
 app.post('/api/oby-budget', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await ObyBudget.findOneAndUpdate({ consulente: req.body.consulente }, { $set: req.body }, { new: true, upsert: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API SPECIFICHE STRADARIO CLOUD
+========================================== */
+// Ottiene lo stradario completo o lo inizializza se vuoto
+app.get('/api/stradario', async (req, res) => {
+  try {
+    let elenco = await Stradario.find({}).sort({ comune: 1 });
+    if (elenco.length === 0) {
+      const initComuni = [
+        { comune: "Legnano", provincia: "MI", abitanti: "61.271", subalterniTotali: 32500, vie: [] },
+        { comune: "Canegrate", provincia: "MI", abitanti: "12.500", subalterniTotali: 6100, vie: [] },
+        { comune: "San Giorgio su Legnano", provincia: "MI", abitanti: "6.700", subalterniTotali: 3100, vie: [] },
+        { comune: "San Vittore Olona", provincia: "MI", abitanti: "8.300", subalterniTotali: 4100, vie: [] },
+        { comune: "Cerro Maggiore", provincia: "MI", abitanti: "15.200", subalterniTotali: 7400, vie: [] },
+        { comune: "Rescaldina", provincia: "MI", abitanti: "14.100", subalterniTotali: 6800, vie: [] },
+        { comune: "Uboldo", provincia: "VA", abitanti: "10.600", subalterniTotali: 4900, vie: [] },
+        { comune: "Origgio", provincia: "VA", abitanti: "7.800", subalterniTotali: 3500, vie: [] },
+        { comune: "Saronno", provincia: "VA", abitanti: "38.600", subalterniTotali: 19800, vie: [] },
+        { comune: "Gerenzano", provincia: "VA", abitanti: "10.900", subalterniTotali: 5100, vie: [] },
+        { comune: "Cislago", provincia: "VA", abitanti: "10.400", subalterniTotali: 4800, vie: [] },
+        { comune: "Turate", provincia: "CO", abitanti: "9.500", subalterniTotali: 4300, vie: [] },
+        { comune: "Limido Comasco", provincia: "CO", abitanti: "3.800", subalterniTotali: 1700, vie: [] },
+        { comune: "Villa Cortese", provincia: "MI", abitanti: "6.200", subalterniTotali: 2900, vie: [] },
+        { comune: "Busto Arsizio", provincia: "VA", abitanti: "82.950", subalterniTotali: 41200, vie: [] },
+        { comune: "Castellanza", provincia: "VA", abitanti: "14.300", subalterniTotali: 6900, vie: [] },
+        { comune: "Olgiate Olona", provincia: "VA", abitanti: "12.400", subalterniTotali: 5800, vie: [] },
+        { comune: "Gallarate", provincia: "VA", abitanti: "52.840", subalterniTotali: 28400, vie: [] },
+        { comune: "Samarate", provincia: "VA", abitanti: "16.020", subalterniTotali: 8100, vie: [] },
+        { comune: "Ferno", provincia: "VA", abitanti: "6.800", subalterniTotali: 3100, vie: [] }
+      ];
+      await Stradario.insertMany(initComuni);
+      elenco = await Stradario.find({}).sort({ comune: 1 });
+    }
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Salva o aggiorna l'intero record di un comune (Aggiunta vie, civici, citofoni)
+app.put('/api/stradario/:comuneId', async (req, res) => {
+  try {
+    const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: { vie: req.body.vie } }, { new: true });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Aggiunge un nuovo comune personalizzato da zero
+app.post('/api/stradario/nuovo-comune', async (req, res) => {
+  try {
+    const nuovo = new Stradario(req.body);
+    res.status(201).json({ status: 'success', data: await nuovo.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
