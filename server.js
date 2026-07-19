@@ -4,7 +4,7 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Supporto per caricamenti Excel massivi
+app.use(express.json({ limit: '10mb' })); // Supporto esteso per importazioni XLSX massive
 
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
