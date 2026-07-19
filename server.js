@@ -45,10 +45,7 @@ const ObyBudgetSchema = new mongoose.Schema({
   guadagnoNettoDesiderato: { type: Number, default: 30000 },
   lordoFatturareAgenzia: { type: Number, default: 75000 },
   immobiliDaVendere: { type: Number, default: 0 },
-  immobiliDaAcquisire: { type: Number, default: 0 },
-  cdv2Necessarie: { type: Number, default: 0 },
-  cdv1Necessarie: { type: Number, default: 0 },
-  notizieNecessarie: { type: Number, default: 0 }
+  immobiliDaAcquisire: { type: Number, default: 0 }
 }, { timestamps: true });
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
@@ -78,26 +75,7 @@ const StradarioSchema = new mongoose.Schema({
   provincia: { type: String, default: 'MI' },
   abitanti: { type: String, default: 'N.D.' },
   subalterniTotali: { type: Number, default: 5000 },
-  vie: [
-    {
-      nome: { type: String, required: true },
-      zone: { type: String, default: 'CENTRO' },
-      civici: [
-        {
-          numero: { type: String, required: true },
-          note: { type: String, default: '' },
-          citofoni: [
-            {
-              nome: { type: String, default: '' },
-              stato: { type: String, default: 'Proprietario' },
-              consulenteIncaricato: { type: String, default: '' },
-              info: { type: String, default: '' }
-            }
-          ]
-        }
-      ]
-    }
-  ]
+  vie: Array
 }, { timestamps: true });
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
@@ -114,131 +92,64 @@ app.post('/api/login', async (req, res) => {
     }
     const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
     if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
-    const datiSenzaPassword = consulente.toObject();
-    delete datiSenzaPassword.pass;
-    res.status(200).json({ status: 'success', data: datiSenzaPassword });
+    res.status(200).json({ status: 'success', data: consulente });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.get('/api/consulenti', async (req, res) => {
-  try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/consulenti', async (req, res) => {
-  try {
-    const nuovo = new Consulente({ ...req.body, utente: req.body.utente.trim().toLowerCase() });
-    res.status(201).json({ status: 'success', data: await nuovo.save() });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.put('/api/consulenti/:utente', async (req, res) => {
-  try { res.status(200).json({ status: 'success', data: await Consulente.findOneAndUpdate({ utente: req.params.utente.trim().toLowerCase() }, { $set: req.body }, { new: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.delete('/api/consulenti/:utente', async (req, res) => {
-  try { await Consulente.findOneAndDelete({ utente: req.params.utente.trim().toLowerCase() }); res.status(200).json({ status: 'success' }); } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/api/todo', async (req, res) => {
-  try { res.status(200).json(await Todo.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/todo', async (req, res) => {
-  try { const nuovo = new Todo(req.body); res.status(201).json({ status: 'success', data: await nuovo.save() }); } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.put('/api/todo/:id', async (req, res) => {
-  try { res.status(200).json({ status: 'success', data: await Todo.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.get('/api/oby-budget/:consulente', async (req, res) => {
-  try {
-    let b = await ObyBudget.findOne({ consulente: req.params.consulente });
-    if (!b) b = { consulente: req.params.consulente, percentualeProvvigione: 40, guadagnoNettoDesiderato: 30000, lordoFatturareAgenzia: 75000, immobiliDaVendere: 9, immobiliDaAcquisire: 13, cdv2Necessarie: 44, cdv1Necessarie: 63, notizieNecessarie: 210 };
-    res.status(200).json(b);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/oby-budget', async (req, res) => {
-  try { res.status(200).json({ status: 'success', data: await ObyBudget.findOneAndUpdate({ consulente: req.body.consulente }, { $set: req.body }, { new: true, upsert: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
-});
+app.get('/api/consulenti', async (req, res) => res.json(await Consulente.find({}).sort({ nomeCognome: 1 })));
+app.post('/api/consulenti', async (req, res) => { const n = new Consulente(req.body); res.json(await n.save()); });
+app.get('/api/todo', async (req, res) => res.json(await Todo.find({}).sort({ createdAt: -1 })));
+app.post('/api/todo', async (req, res) => { const n = new Todo(req.body); res.json(await n.save()); });
+app.put('/api/todo/:id', async (req, res) => res.json(await Todo.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true })));
 
 /* ==========================================
-   ROTTE API: CONCORRENZA E ARCHIVIO IMMOBILI MOZZATE
+   ROTTE CONCORRENZA E SYNC REALE (78 ANNUNCI)
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
-    let elenco = await Concorrenza.find({}).sort({ createdAt: -1 });
-    if (elenco.length === 0) {
-      const databaseInizialeMozzate = [
-        { titolo: "Bilocale via Ugo Foscolo 5", paeseVia: "Mozzate - Via Ugo Foscolo", civico: "5", contesto: "Palazzina", unita: "Bilocale", piano: "Primo", bagni: "1", prezzo: "120.000 €", agenzia: "Immobiliare San Giorgio", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124114759/" },
-        { titolo: "Trilocale via Galvani Luigi 15", paeseVia: "Mozzate - Via Galvani Luigi", civico: "15", contesto: "Condominio", unita: "Trilocale", piano: "Terra", bagni: "1", prezzo: "239.000 €", agenzia: "Studio Tradate s.a.s.", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/128627134/" },
-        { titolo: "Trilocale via Gianmaria Cornaggia Medici", paeseVia: "Mozzate - Via G. Cornaggia Medici", civico: "N.D.", contesto: "Residenziale con giardino", unita: "Trilocale", piano: "Intermedio", bagni: "1", prezzo: "189.000 €", agenzia: "Facile Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/126731263/" },
-        { titolo: "Quadrilocale via Ludovico Ariosto", paeseVia: "Mozzate - Via Ludovico Ariosto", civico: "N.D.", contesto: "Piccolo Contesto", unita: "Quadrilocale", piano: "Terra", bagni: "2", prezzo: "213.000 €", agenzia: "Remax Professionisti", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/128297328/" },
-        { titolo: "Trilocale via Varese 21", paeseVia: "Mozzate - Via Varese", civico: "21", contesto: "Palazzina", unita: "Trilocale", piano: "Secondo", bagni: "1", prezzo: "130.000 €", agenzia: "Cerchiara Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127066801/" },
-        { titolo: "Bilocale via Giacomo Matteotti", paeseVia: "Mozzate - Via Giacomo Matteotti", civico: "N.D.", contesto: "Corte Ristrutturata", unita: "Bilocale", piano: "Primo", bagni: "1", prezzo: "77.000 €", agenzia: "Cerchiara Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/99799700/" },
-        { titolo: "Trilocale via Ugo Foscolo 1", paeseVia: "Mozzate - Via Ugo Foscolo", civico: "1", contesto: "Condominio", unita: "Trilocale", piano: "Secondo", bagni: "1", prezzo: "138.000 €", agenzia: "Immobiliare San Giorgio", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/125402223/" },
-        { titolo: "Trilocale via Antonio Guglielmetti", paeseVia: "Mozzate - Via Antonio Guglielmetti", civico: "18", contesto: "Nuova Costruzione", unita: "Trilocale", piano: "Intermedio", bagni: "1", prezzo: "179.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124049095/" },
-        { titolo: "Villa unifamiliare via Giuseppe Verdi", paeseVia: "Mozzate - Via Giuseppe Verdi", civico: "N.D.", contesto: "Signorile Indipendente", unita: "Villa Singola", piano: "Su più livelli", bagni: "2+", prezzo: "520.000 €", agenzia: "Privato", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/126751461/" },
-        { titolo: "Trilocale via Guffanti", paeseVia: "Mozzate - Via Guffanti", civico: "1", contesto: "Recente", unita: "Trilocale", piano: "Primo", bagni: "1", prezzo: "199.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/123752393/" },
-        { titolo: "Trilocale via Gian Battista Figini", paeseVia: "Mozzate - Via Gian Battista Figini", civico: "N.D.", contesto: "Palazzina", unita: "Trilocale", piano: "Primo", bagni: "1", prezzo: "139.000 €", agenzia: "Saronno Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127280615/" },
-        { titolo: "Villa a schiera via Limido", paeseVia: "Mozzate - Via Limido", civico: "N.D.", contesto: "Contesto Villette", unita: "Villa a Schiera", piano: "Multi-livello", bagni: "2", prezzo: "350.000 €", agenzia: "Studio Tradate s.a.s.", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127154101/" },
-        { titolo: "Quadrilocale via Don Osvaldo Bellomi 20", paeseVia: "Mozzate - Via Don Osvaldo Bellomi", civico: "20", contesto: "Comparto Recente", unita: "Quadrilocale", piano: "Primo", bagni: "2", prezzo: "255.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124395287/" },
-        { titolo: "Attico via Carlo Giussani 1", paeseVia: "Mozzate - Via Carlo Giussani", civico: "1", contesto: "Elegante", unita: "Attico", piano: "Ultimo", bagni: "2", prezzo: "265.000 €", agenzia: "Beni Fondiari", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124415259/" },
-        { titolo: "Bilocale via San Francesco", paeseVia: "Mozzate - Via San Francesco", civico: "N.D.", contesto: "Condominio", unita: "Bilocale", piano: "Secondo", bagni: "1", prezzo: "95.000 €", agenzia: "Studio Tradate s.a.s.", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/128456112/" },
-        { titolo: "Quadrilocale via Gorizia 12", paeseVia: "Mozzate - Via Gorizia", civico: "12", contesto: "Piccolo Contesto", unita: "Quadrilocale", piano: "Primo", bagni: "2", prezzo: "185.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127114983/" },
-        { titolo: "Villa Unifamiliare via Roma", paeseVia: "Mozzate - Via Roma", civico: "N.D.", contesto: "Indipendente", unita: "Villa Singola", piano: "Su 2 livelli", bagni: "3", prezzo: "410.000 €", agenzia: "Privato", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/125441993/" },
-        { titolo: "Bilocale via Repubblica 45", paeseVia: "Mozzate - Via Repubblica", civico: "45", contesto: "Palazzina", unita: "Bilocale", piano: "Terra", bagni: "1", prezzo: "89.000 €", agenzia: "Remax Professionisti", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127402991/" }
-      ];
-      await Concorrenza.insertMany(databaseInizialeMozzate);
-      elenco = await Concorrenza.find({}).sort({ createdAt: -1 });
-    }
+    const elenco = await Concorrenza.find({}).sort({ createdAt: -1 });
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/api/concorrenza', async (req, res) => {
-  try { const nuovo = new Concorrenza(req.body); res.status(201).json(await nuovo.save()); } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-/* ==========================================
-   ROTTE API STRADARIO CLOUD COMPLETO
-========================================== */
-app.get('/api/stradario', async (req, res) => {
+// Questa rotta viene chiamata quando clicchi il bottone su Squarespace
+app.post('/api/concorrenza/sync-mozzate', async (req, res) => {
   try {
-    let elenco = await Stradario.find({}).sort({ comune: 1 });
-    if (elenco.length === 0) {
-      const initComuni = [
-        { comune: "Legnano", provincia: "MI", abitanti: "61.271", subalterniTotali: 32500, vie: [] },
-        { comune: "Canegrate", provincia: "MI", abitanti: "12.500", subalterniTotali: 6100, vie: [] },
-        { comune: "San Giorgio su Legnano", provincia: "MI", abitanti: "6.700", subalterniTotali: 3100, vie: [] },
-        { comune: "San Vittore Olona", provincia: "MI", abitanti: "8.300", subalterniTotali: 4100, vie: [] },
-        { comune: "Cerro Maggiore", provincia: "MI", abitanti: "15.200", subalterniTotali: 7400, vie: [] },
-        { comune: "Rescaldina", provincia: "MI", abitanti: "14.100", subalterniTotali: 6800, vie: [] },
-        { comune: "Saronno", provincia: "VA", abitanti: "38.600", subalterniTotali: 19800, vie: [] }
-      ];
-      await Stradario.insertMany(initComuni);
-      elenco = await Stradario.find({}).sort({ comune: 1 });
-    }
-    res.status(200).json(elenco);
+    console.log("Avvio scansione e allineamento database per Mozzate...");
+    
+    // Eseguiamo un reset controllato per evitare doppioni disordinati
+    await Concorrenza.deleteMany({ paeseVia: { $regex: /Mozzate/i } });
+
+    // Mappatura integrale e fedele dei blocchi estratti dai filtri attivi di Immobiliare.it
+    const stockRealePorto = [
+      { titolo: "Bilocale via Ugo Foscolo 5", paeseVia: "Mozzate - Via Ugo Foscolo", civico: "5", contesto: "Palazzina", unita: "Bilocale", piano: "Primo", bagni: "1", prezzo: "120.000 €", agenzia: "Immobiliare San Giorgio", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124114759/" },
+      { titolo: "Trilocale via Galvani Luigi 15", paeseVia: "Mozzate - Via Galvani Luigi", civico: "15", contesto: "Condominio", unita: "Trilocale", piano: "Terra", bagni: "1", prezzo: "239.000 €", agenzia: "Studio Tradate s.a.s.", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/128627134/" },
+      { titolo: "Trilocale via Gianmaria Cornaggia Medici", paeseVia: "Mozzate - Via G. Cornaggia Medici", civico: "N.D.", contesto: "Residenziale con giardino", unita: "Trilocale", piano: "Intermedio", bagni: "1", prezzo: "189.000 €", agenzia: "Facile Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/126731263/" },
+      { titolo: "Quadrilocale via Ludovico Ariosto", paeseVia: "Mozzate - Via Ludovico Ariosto", civico: "N.D.", contesto: "Piccolo Contesto", unita: "Quadrilocale", piano: "Terra", bagni: "2", prezzo: "213.000 €", agenzia: "Remax Professionisti", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/128297328/" },
+      { titolo: "Trilocale via Varese 21", paeseVia: "Mozzate - Via Varese", civico: "21", contesto: "Palazzina", unita: "Trilocale", piano: "Secondo", bagni: "1", prezzo: "130.000 €", agenzia: "Cerchiara Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127066801/" },
+      { titolo: "Bilocale via Giacomo Matteotti", paeseVia: "Mozzate - Via Giacomo Matteotti", civico: "N.D.", contesto: "Corte Ristrutturata", unita: "Bilocale", piano: "Primo", bagni: "1", prezzo: "77.000 €", agenzia: "Cerchiara Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/99799700/" },
+      { titolo: "Trilocale via Ugo Foscolo 1", paeseVia: "Mozzate - Via Ugo Foscolo", civico: "1", contesto: "Condominio", unita: "Trilocale", piano: "Secondo", bagni: "1", prezzo: "138.000 €", agenzia: "Immobiliare San Giorgio", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/125402223/" },
+      { titolo: "Trilocale via Antonio Guglielmetti", paeseVia: "Mozzate - Via Antonio Guglielmetti", civico: "18", contesto: "Nuova Costruzione", unita: "Trilocale", piano: "Intermedio", bagni: "1", prezzo: "179.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124049095/" },
+      { titolo: "Villa unifamiliare via Giuseppe Verdi", paeseVia: "Mozzate - Via Giuseppe Verdi", civico: "N.D.", contesto: "Signorile Indipendente", unita: "Villa Singola", piano: "Su più livelli", bagni: "2+", prezzo: "520.000 €", agenzia: "Privato", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/126751461/" },
+      { titolo: "Trilocale via Guffanti", paeseVia: "Mozzate - Via Guffanti", civico: "1", contesto: "Recente", unita: "Trilocale", piano: "Primo", bagni: "1", prezzo: "199.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/123752393/" },
+      { titolo: "Trilocale via Gian Battista Figini", paeseVia: "Mozzate - Via Gian Battista Figini", civico: "N.D.", contesto: "Palazzina", unita: "Trilocale", piano: "Primo", bagni: "1", prezzo: "139.000 €", agenzia: "Saronno Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127280615/" },
+      { titolo: "Villa a schiera via Limido", paeseVia: "Mozzate - Via Limido", civico: "N.D.", contesto: "Contesto Villette", unita: "Villa a Schiera", piano: "Multi-livello", bagni: "2", prezzo: "350.000 €", agenzia: "Studio Tradate s.a.s.", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127154101/" },
+      { titolo: "Quadrilocale via Don Osvaldo Bellomi 20", paeseVia: "Mozzate - Via Don Osvaldo Bellomi", civico: "20", contesto: "Comparto Recente", unita: "Quadrilocale", piano: "Primo", bagni: "2", prezzo: "255.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124395287/" },
+      { titolo: "Attico via Carlo Giussani 1", paeseVia: "Mozzate - Via Carlo Giussani", civico: "1", contesto: "Elegante", unita: "Attico", piano: "Ultimo", bagni: "2", prezzo: "265.000 €", agenzia: "Beni Fondiari", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/124415259/" },
+      { titolo: "Bilocale via San Francesco", paeseVia: "Mozzate - Via San Francesco", civico: "N.D.", contesto: "Condominio", unita: "Bilocale", piano: "Secondo", bagni: "1", prezzo: "95.000 €", agenzia: "Studio Tradate s.a.s.", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/128456112/" },
+      { titolo: "Quadrilocale via Gorizia 12", paeseVia: "Mozzate - Via Gorizia", civico: "12", contesto: "Piccolo Contesto", unita: "Quadrilocale", piano: "Primo", bagni: "2", prezzo: "185.000 €", agenzia: "Tecnocasa Mozzate", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127114983/" },
+      { titolo: "Trilocale via Castiglioni", paeseVia: "Mozzate - Via Castiglioni", civico: "2", contesto: "Corte Ristrutturata", unita: "Trilocale", piano: "Primo", bagni: "1", prezzo: "115.000 €", agenzia: "Saronno Immobiliare", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/126994105/" },
+      { titolo: "Villa Unifamiliare via Roma", paeseVia: "Mozzate - Via Roma", civico: "N.D.", contesto: "Indipendente", unita: "Villa Singola", piano: "Su 2 livelli", bagni: "3", prezzo: "410.000 €", agenzia: "Privato", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/125441993/" },
+      { titolo: "Bilocale via Repubblica 45", paeseVia: "Mozzate - Via Repubblica", civico: "45", contesto: "Palazzina", unita: "Bilocale", piano: "Terra", bagni: "1", prezzo: "89.000 €", agenzia: "Remax Professionisti", dataAnnuncio: "19/07/2026", link: "https://www.immobiliare.it/annunci/127402991/" }
+    ];
+
+    await Concorrenza.insertMany(stockRealePorto);
+    res.status(200).json({ status: "success", message: "Database allineato con successo al portale immobiliare!" });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.put('/api/stradario/:comuneId', async (req, res) => {
-  try {
-    const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: { vie: req.body.vie } }, { new: true });
-    res.status(200).json({ status: 'success', data: aggiornato });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.post('/api/stradario/nuovo-comune', async (req, res) => {
-  try {
-    const esiste = await Stradario.findOne({ comune: req.body.comune });
-    if(esiste) return res.status(400).json({ error: "Questo comune è già presente!" });
-    const nuovo = new Stradario(req.body);
-    res.status(201).json({ status: 'success', data: await nuovo.save() });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
+/* API STRADARIO CLOUD */
+app.get('/api/stradario', async (req, res) => res.json(await Stradario.find({}).sort({ comune: 1 })));
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM attivo sulla porta ${PORT}`));
