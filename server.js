@@ -15,6 +15,9 @@ mongoose.connect(mongoURI)
   .then(() => console.log('Database MongoDB Cloud Connesso con Successo!'))
   .catch((err) => console.error('Errore critico di connessione DB:', err));
 
+/* ==========================================
+   MODELLO 1: CONSULENTI
+========================================== */
 const ConsulenteSchema = new mongoose.Schema(
   {
     nomeCognome: { type: String, required: true },
@@ -28,13 +31,57 @@ const ConsulenteSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
+/* ==========================================
+   MODELLO 2: TO DO LIST
+========================================== */
+const TodoSchema = new mongoose.Schema(
+  {
+    data: { type: String, required: true, default: '19/07/2026' },
+    task: { type: String, required: true },
+    consulente: { type: String, default: '' },
+    stato: { type: String, default: 'Attivo' },
+    note: { type: String, default: '' }
+  },
+  { timestamps: true }
+);
+const Todo = mongoose.model('Todo', TodoSchema);
+
+/* ==========================================
+   ROTTE API: GENERALI & LOGIN
+========================================== */
 app.get('/', (req, res) => {
   res.json({ status: 'success', message: 'Forte CRM Backend attivo' });
 });
 
+app.post('/api/login', async (req, res) => {
+  try {
+    const { utente, pass } = req.body;
+    if (!utente || !pass) return res.status(400).json({ error: 'Campi obbligatori mancanti' });
+    
+    if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
+      return res.status(200).json({
+        status: 'success',
+        data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin" }
+      });
+    }
+
+    const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
+    if (!consulente || consulente.pass !== pass) {
+      return res.status(401).json({ error: 'Username o password errati' });
+    }
+    const datiSenzaPassword = consulente.toObject();
+    delete datiSenzaPassword.pass;
+    res.status(200).json({ status: 'success', data: datiSenzaPassword });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================
+   ROTTE API: CONSULENTI
+========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try {
     const lista = await Consulente.find({}).sort({ nomeCognome: 1 });
@@ -62,9 +109,7 @@ app.post('/api/consulenti', async (req, res) => {
     const salvato = await nuovo.save();
     res.status(201).json({ status: 'success', data: salvato });
   } catch (err) {
-    if (err.code === 11000) {
-      return res.status(400).json({ error: 'Username già esistente nel database.' });
-    }
+    if (err.code === 11000) return res.status(400).json({ error: 'Username già esistente.' });
     res.status(400).json({ error: err.message });
   }
 });
@@ -72,23 +117,16 @@ app.post('/api/consulenti', async (req, res) => {
 app.put('/api/consulenti/:utente', async (req, res) => {
   try {
     const datiDaAggiornare = {
-      nomeCognome: req.body.nomeCognome,
-      telefono: req.body.telefono,
-      mail: req.body.mail,
-      idTelegram: req.body.idTelegram,
-      idWhatsapp: req.body.idWhatsapp,
-      pass: req.body.pass,
-      ruolo: req.body.ruolo
+      nomeCognome: req.body.nomeCognome, telefono: req.body.telefono, mail: req.body.mail,
+      idTelegram: req.body.idTelegram, idWhatsapp: req.body.idWhatsapp, pass: req.body.pass, ruolo: req.body.ruolo
     };
-    const consulenteAggiornato = await Consulente.findOneAndUpdate(
+    const aggiornato = await Consulente.findOneAndUpdate(
       { utente: req.params.utente.trim().toLowerCase() },
       { $set: datiDaAggiornare },
       { new: true, runValidators: true }
     );
-    if (!consulenteAggiornato) {
-      return res.status(404).json({ error: 'Consulente non trovato' });
-    }
-    res.status(200).json({ status: 'success', data: consulenteAggiornato });
+    if (!aggiornato) return res.status(404).json({ error: 'Consulente non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
@@ -104,30 +142,48 @@ app.delete('/api/consulenti/:utente', async (req, res) => {
   }
 });
 
-app.post('/api/login', async (req, res) => {
+/* ==========================================
+   ROTTE API: TO DO LIST (LIVE CLOUD)
+========================================== */
+// Legge tutti i task salvati
+app.get('/api/todo', async (req, res) => {
   try {
-    const { utente, pass } = req.body;
-    if (!utente || !pass) {
-      return res.status(400).json({ error: 'Campi obbligatori mancanti' });
-    }
-    
-    // ACCESSO MASTER BYPASS EMERGENZA
-    if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
-      return res.status(200).json({
-        status: 'success',
-        data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin" }
-      });
-    }
-
-    const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
-    if (!consulente || consulente.pass !== pass) {
-      return res.status(401).json({ error: 'Username o password errati' });
-    }
-    const datiSenzaPassword = consulente.toObject();
-    delete datiSenzaPassword.pass;
-    res.status(200).json({ status: 'success', data: datiSenzaPassword });
+    const lista = await Todo.find({}).sort({ createdAt: -1 });
+    res.status(200).json(lista);
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Crea un nuovo task
+app.post('/api/todo', async (req, res) => {
+  try {
+    const nuovo = new Todo({
+      data: req.body.data,
+      task: req.body.task,
+      consulente: req.body.consulente,
+      stato: req.body.stato || 'Attivo',
+      note: req.body.note || ''
+    });
+    const salvato = await nuovo.save();
+    res.status(201).json({ status: 'success', data: salvato });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// Modifica lo stato o i dati di un task esistente tramite ID
+app.put('/api/todo/:id', async (req, res) => {
+  try {
+    const aggiornato = await Todo.findByIdAndUpdate(
+      req.params.id,
+      { $set: req.body },
+      { new: true }
+    );
+    if (!aggiornato) return res.status(404).json({ error: 'Task non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
   }
 });
 
