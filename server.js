@@ -1,19 +1,19 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-
 const app = express();
+
+app.use(cors());
 app.use(express.json());
-app.use(cors()); // Consente le richieste asincrone da Squarespace
 
-// STRINGA DI CONNESSIONE AGGIORNATA CON LE TUE CREDENZIALI ATTIVE
-const MONGO_URI = "mongodb+srv://aforte_db_user:JlHus5D3MmjuaTpm@cluster0.mongodb.net/forte_crm?retryWrites=true&w=majority";
+// Legge la stringa di connessione in modo sicuro dalle variabili di Render
+const mongoURI = process.env.MONGO_URI; 
 
-mongoose.connect(MONGO_URI)
+mongoose.connect(mongoURI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => console.log("Database MongoDB Cloud Connesso con Successo!"))
   .catch(err => console.error("Errore critico di connessione DB:", err));
 
-// Schema strutturato per l'archiviazione dei consulenti e dati di login
+// Schema del Consulente (Aggiornato per supportare i ruoli multipli)
 const ConsulenteSchema = new mongoose.Schema({
   nomeCognome: String,
   telefono: String,
@@ -21,35 +21,60 @@ const ConsulenteSchema = new mongoose.Schema({
   idTelegram: String,
   idWhatsapp: String,
   utente: { type: String, unique: true, required: true },
-  pass: { type: String, required: true },
-  ruolo: String
+  pass: String,
+  ruolo: String 
 });
 
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
-// API 1: Estrarre la lista completa di utenze
+// 1. GET - Legge tutti i consulenti dal database
 app.get('/api/consulenti', async (req, res) => {
   try {
-    const consulenti = await Consulente.find();
-    res.json(consulenti);
+    const lista = await Consulente.find({});
+    res.json(lista);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// API 2: Salvare una nuova credenziale inviata dalla plancia
+// 2. POST - Crea un nuovo consulente (Inizializzazione)
 app.post('/api/consulenti', async (req, res) => {
   try {
     const nuovo = new Consulente(req.body);
     await nuovo.save();
-    res.status(201).json({ status: "success", data: nuovo });
+    res.json({ status: "success", data: nuevo });
+  } catch (err) {
+    res.status(400).json({ error: "Username già esistente o dati non validi." });
+  }
+});
+
+// 3. PUT - Modifica un consulente esistente senza creare duplicati
+app.put('/api/consulenti/:utente', async (req, res) => {
+  try {
+    const consulenteAggiornato = await Consulente.findOneAndUpdate(
+      { utente: req.params.utente },
+      req.body,
+      { new: true, runValidators: true }
+    );
+    if (!consulenteAggiornato) {
+      return res.status(404).json({ error: "Consulente non trovato" });
+    }
+    res.json({ status: "success", data: consulenteAggiornato });
   } catch (err) {
     res.status(400).json({ error: err.message });
   }
 });
 
-// Controllo stato di salute per Render
-app.get('/', (req, res) => res.send("Server di Rete per CRM Forte Immobiliare online. Database Connesso."));
+// 4. DELETE - Elimina un consulente dal database
+app.delete('/api/consulenti/:utente', async (req, res) => {
+  try {
+    const eliminato = await Consulente.findOneAndDelete({ utente: req.params.utente });
+    if (!eliminato) return res.status(404).json({ error: "Consulente non trovato" });
+    res.json({ status: "success", message: "Eliminato con successo" });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Motore di backend operativo sulla porta ${PORT}`));
+app.listen(PORT, () => console.log(`Server CRM in ascolto sulla porta ${PORT}`));
