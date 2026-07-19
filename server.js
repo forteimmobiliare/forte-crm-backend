@@ -133,7 +133,8 @@ app.post('/api/login', async (req, res) => {
     if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
       return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin", areeVisibili: [], consulentiVisibili: [] } });
     }
-    const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
+    // RIPRISTINATO IDENTICO: rimosso il .toLowerCase() per evitare blocchi sulle maiuscole del database
+    const consulente = await Consulente.findOne({ utente: utente.trim() });
     if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
     const datiSenzaPassword = consulente.toObject();
     delete datiSenzaPassword.pass;
@@ -150,7 +151,7 @@ app.get('/api/consulenti', async (req, res) => {
 
 app.post('/api/consulenti', async (req, res) => {
   try {
-    const nuovo = new Consulente({ ...req.body, utente: req.body.utente.trim().toLowerCase() });
+    const nuovo = new Consulente({ ...req.body, utente: req.body.utente.trim() });
     res.status(201).json({ status: 'success', data: await nuovo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -234,7 +235,6 @@ app.get('/api/stradario', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Allineato per aggiornare e sovrascrivere anche abitanti e subalterni totali del paese
 app.put('/api/stradario/:comuneId', async (req, res) => {
   try {
     const updateFields = { vie: req.body.vie };
@@ -246,7 +246,6 @@ app.put('/api/stradario/:comuneId', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-// Allineato per salvare abitanti e subalterni passati alla creazione di un nuovo comune
 app.post('/api/stradario/nuovo-comune', async (req, res) => {
   try {
     const esiste = await Stradario.findOne({ comune: req.body.comune });
@@ -265,7 +264,7 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CONCORRENZA MANUALE ED EXCEL (PULITA)
+   ROTTE API: CONCORRENZA MANUALE ED EXCEL
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
