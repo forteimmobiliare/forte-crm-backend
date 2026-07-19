@@ -15,6 +15,9 @@ mongoose.connect(mongoURI)
   .then(() => console.log('Database MongoDB Cloud Connesso con Successo!'))
   .catch((err) => console.error('Errore critico di connessione DB:', err));
 
+/* ==========================================
+   1. MODELLI DATABASE CORE (CONSULENTI & TASK)
+========================================== */
 const ConsulenteSchema = new mongoose.Schema({
   nomeCognome: { type: String, required: true },
   telefono: { type: String, default: '' },
@@ -38,6 +41,9 @@ const TodoSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Todo = mongoose.model('Todo', TodoSchema);
 
+/* ==========================================
+   2. MODELLO TARGET & BUDGET (OBY)
+========================================== */
 const ObyBudgetSchema = new mongoose.Schema({
   consulente: { type: String, required: true, unique: true },
   percentualeProvvigione: { type: Number, default: 40 },
@@ -51,6 +57,9 @@ const ObyBudgetSchema = new mongoose.Schema({
 }, { timestamps: true });
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
+/* ==========================================
+   3. MODELLO STRADARIO LIVE CLOUD E COPERTURA (AGGIORNATO)
+========================================== */
 const StradarioSchema = new mongoose.Schema({
   comune: { type: String, required: true, unique: true },
   provincia: { type: String, default: 'MI' },
@@ -67,9 +76,23 @@ const StradarioSchema = new mongoose.Schema({
           citofoni: [
             {
               nome: { type: String, default: '' },
-              stato: { type: String, default: 'Proprietario' },
-              consulenteIncaricato: { type: String, default: '' },
-              info: { type: String, default: '' }
+              statoProprietario: { type: String, default: 'Proprietario Residente' },
+              piano: { type: String, default: '' },
+              vani: { type: String, default: '' },
+              sub: { type: String, default: '' },
+              mq: { type: String, default: '' },
+              nomeCognomeCf: { type: String, default: '' },
+              nomeCognomeAnno: { type: String, default: '' }
+            }
+          ],
+          proprietariNonResidenti: [
+            {
+              piano: { type: String, default: '' },
+              vani: { type: String, default: '' },
+              sub: { type: String, default: '' },
+              mq: { type: String, default: '' },
+              nomeCognomeCf: { type: String, default: '' },
+              nomeCognomeAnno: { type: String, default: '' }
             }
           ]
         }
@@ -79,6 +102,9 @@ const StradarioSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
+/* ==========================================
+   4. MODELLO CONCORRENZA MANUALE ED EXCEL (PULITA)
+========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
   paeseVia: { type: String, required: true },
@@ -94,6 +120,9 @@ const ConcorrenzaSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
+/* ==========================================
+   ROTTE API INTERNE CORE & AUTENTICAZIONE
+========================================== */
 app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Backend attivo e integro al 100%' }));
 
 app.post('/api/login', async (req, res) => {
@@ -102,7 +131,7 @@ app.post('/api/login', async (req, res) => {
     if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
       return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin", areeVisibili: [], consulentiVisibili: [] } });
     }
-    const consulente = await Consulente.findOne({ utente: utente.trim() });
+    const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
     if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
     const datiSenzaPassword = consulente.toObject();
     delete datiSenzaPassword.pass;
@@ -110,13 +139,16 @@ app.post('/api/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ==========================================
+   ROTTE API: CONSULENTI (CON ELIMINAZIONE E PERMESSI)
+========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/consulenti', async (req, res) => {
   try {
-    const nuovo = new Consulente({ ...req.body, utente: req.body.utente.trim() });
+    const nuovo = new Consulente({ ...req.body, utente: req.body.utente.trim().toLowerCase() });
     res.status(201).json({ status: 'success', data: await nuovo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -134,7 +166,7 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
     const { areeVisibili, consulentiVisibili } = req.body;
     const aggiornato = await Consulente.findByIdAndUpdate(
       req.params.id,
-      { $set: { areeVisibili: areeVisibili || [], consulentiVisibili: consulentiVisibul || [] } },
+      { $set: { areeVisibili: areeVisibili || [], consulentiVisibili: consulentiVisibili || [] } },
       { new: true }
     );
     if (!aggiornato) return res.status(404).json({ error: 'Consulente non trovato' });
@@ -142,6 +174,9 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+/* ==========================================
+   ROTTE API: TODO (CON ELIMINAZIONE)
+========================================== */
 app.get('/api/todo', async (req, res) => {
   try { res.status(200).json(await Todo.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -174,6 +209,9 @@ app.post('/api/oby-budget', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await ObyBudget.findOneAndUpdate({ consulente: req.body.consulente }, { $set: req.body }, { new: true, upsert: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+/* ==========================================
+   ROTTE API: STRADARIO CLOUD COMPLETO (CON TUTTI I TUOI COMUNI INIZIALI)
+========================================== */
 app.get('/api/stradario', async (req, res) => {
   try {
     let elenco = await Stradario.find({}).sort({ comune: 1 });
@@ -218,6 +256,9 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ==========================================
+   ROTTE API: CONCORRENZA MANUALE ED EXCEL (CON ELIMINAZIONE)
+========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
     const elenco = await Concorrenza.find({}).sort({ createdAt: -1 });
