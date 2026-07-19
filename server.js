@@ -33,7 +33,7 @@ const ConsulenteSchema = new mongoose.Schema({
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
 const TodoSchema = new mongoose.Schema({
-  data: { type: String, required: true, default: '19/07/2026' },
+  data: { type: String, required: true, default: '20/07/2026' },
   task: { type: String, required: true },
   consulente: { type: String, default: '' },
   stato: { type: String, default: 'Attivo' },
@@ -73,9 +73,9 @@ const StradarioSchema = new mongoose.Schema({
         {
           numero: { type: String, required: true },
           note: { type: String, default: '' },
-          contestoCivico: { type: String, default: 'Palazzina' }, // Nuova tendina a livello civico
-          foglio: { type: String, default: '' },                 // Nuovo campo Foglio catastale
-          particella: { type: String, default: '' },             // Nuovo campo Particella catastale
+          contestoCivico: { type: String, default: 'Palazzina' },
+          foglio: { type: String, default: '' },
+          particella: { type: String, default: '' },
           citofoni: [
             {
               nome: { type: String, default: '' },
@@ -108,7 +108,7 @@ const StradarioSchema = new mongoose.Schema({
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
 /* ==========================================
-   4. MODELLO CONCORRENZA MANUALE ED EXCEL (PULITA)
+   4. MODELLO CONCORRENZA MANUALE ED EXCEL
 ========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
@@ -120,10 +120,22 @@ const ConcorrenzaSchema = new mongoose.Schema({
   bagni: { type: String, default: '1' },
   prezzo: { type: String, required: true },
   agenzia: { type: String, default: 'Concorrente' },
-  dataAnnuncio: { type: String, default: '19/07/2026' },
+  dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' }
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
+
+/* ==========================================
+   5. NUOVO MODELLO: CAPITALE SOCIALE (ANAGRAFICA PROPRIETARI)
+========================================== */
+const CapitaleSocialeSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  cf: { type: String, default: '' },
+  tel: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  inseritoDa: { type: String, default: '' }
+}, { timestamps: true });
+const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
 
 /* ==========================================
    ROTTE API INTERNE CORE & AUTENTICAZIONE
@@ -145,7 +157,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CONSULENTI (CON ELIMINAZIONE E PERMESSI)
+   ROTTE API: CONSULENTI
 ========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
@@ -302,6 +314,23 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
     if (!eliminato) return res.status(404).json({ error: 'Annuncio non trovato' });
     res.status(200).json({ status: 'success', message: 'Annuncio eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: NUOVE ROTTE PER CAPITALE SOCIALE
+========================================== */
+app.get('/api/capitale-sociale', async (req, res) => {
+  try {
+    const elenco = await CapitaleSociale.find({}).sort({ nome: 1 });
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/capitale-sociale', async (req, res) => {
+  try {
+    const nuovo = new CapitaleSociale(req.body);
+    res.status(201).json({ status: 'success', data: await nuovo.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
