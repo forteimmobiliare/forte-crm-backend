@@ -83,12 +83,12 @@ const StradarioSchema = new mongoose.Schema({
               mq: { type: String, default: '' },
               nomeCognomeCf: { type: String, default: '' },
               nomeCognomeAnno: { type: String, default: '' },
-              proprietarioCollegatoId: { type: String, default: '' } // Campo per salvare il collegamento alla tendina
+              proprietarioCollegatoId: { type: String, default: '' }
             }
           ],
           proprietariNonResidenti: [
             {
-              _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() }, // Genera un ID per l'aggancio
+              _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
               piano: { type: String, default: '' },
               vani: { type: String, default: '' },
               sub: { type: String, default: '' },
@@ -105,7 +105,7 @@ const StradarioSchema = new mongoose.Schema({
 const Stradario = mongoose.model('Stradario', StradarioSchema);
 
 /* ==========================================
-   4. MODELLO CONCORRENZA MANUALE ED EXCEL
+   4. MODELLO CONCORRENZA MANUALE ED EXCEL (PULITA)
 ========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
@@ -234,13 +234,19 @@ app.get('/api/stradario', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Allineato per aggiornare e sovrascrivere anche abitanti e subalterni totali del paese
 app.put('/api/stradario/:comuneId', async (req, res) => {
   try {
-    const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: { vie: req.body.vie } }, { new: true });
+    const updateFields = { vie: req.body.vie };
+    if (req.body.abitanti) updateFields.abitanti = req.body.abitanti;
+    if (req.body.subalterniTotali) updateFields.subalterniTotali = Number(req.body.subalterniTotali);
+
+    const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: updateFields }, { new: true });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Allineato per salvare abitanti e subalterni passati alla creazione di un nuovo comune
 app.post('/api/stradario/nuovo-comune', async (req, res) => {
   try {
     const esiste = await Stradario.findOne({ comune: req.body.comune });
@@ -259,7 +265,7 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CONCORRENZA MANUALE ED EXCEL
+   ROTTE API: CONCORRENZA MANUALE ED EXCEL (PULITA)
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
