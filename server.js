@@ -4,7 +4,7 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' })); // Supporto esteso per importazioni XLSX massive
+app.use(express.json({ limit: '10mb' }));
 
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
@@ -123,6 +123,9 @@ app.post('/api/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ==========================================
+   ROTTE API: CONSULENTI (CON ELIMINAZIONE)
+========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -134,6 +137,17 @@ app.post('/api/consulenti', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.delete('/api/consulenti/:id', async (req, res) => {
+  try {
+    const eliminato = await Consulente.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Consulente non trovato' });
+    res.status(200).json({ status: 'success', message: 'Consulente eliminato con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: TODO (CON ELIMINAZIONE)
+========================================== */
 app.get('/api/todo', async (req, res) => {
   try { res.status(200).json(await Todo.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -144,6 +158,14 @@ app.post('/api/todo', async (req, res) => {
 
 app.put('/api/todo/:id', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await Todo.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/todo/:id', async (req, res) => {
+  try {
+    const eliminato = await Todo.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Task non trovato' });
+    res.status(200).json({ status: 'success', message: 'Task eliminato con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/oby-budget/:consulente', async (req, res) => {
@@ -159,7 +181,7 @@ app.post('/api/oby-budget', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: STRADARIO CLOUD COMPLETO
+   ROTTE API: STRADARIO CLOUD COMPLETO (CON ELIMINAZIONE COMUNE)
 ========================================== */
 app.get('/api/stradario', async (req, res) => {
   try {
@@ -197,8 +219,16 @@ app.post('/api/stradario/nuovo-comune', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.delete('/api/stradario/:comuneId', async (req, res) => {
+  try {
+    const eliminato = await Stradario.findByIdAndDelete(req.params.comuneId);
+    if (!eliminato) return res.status(404).json({ error: 'Comune non trovato' });
+    res.status(200).json({ status: 'success', message: 'Comune eliminato con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* ==========================================
-   ROTTE API: CONCORRENZA MANUALE ED EXCEL (PULITE)
+   ROTTE API: CONCORRENZA MANUALE ED EXCEL (CON ELIMINAZIONE)
 ========================================== */
 app.get('/api/concorrenza', async (req, res) => {
   try {
@@ -225,6 +255,14 @@ app.delete('/api/concorrenza/svuota', async (req, res) => {
   try {
     await Concorrenza.deleteMany({});
     res.status(200).json({ status: 'success', message: 'Tabella Concorrenza azzerata' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/concorrenza/:id', async (req, res) => {
+  try {
+    const eliminato = await Concorrenza.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Annuncio non trovato' });
+    res.status(200).json({ status: 'success', message: 'Annuncio eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
