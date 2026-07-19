@@ -26,7 +26,9 @@ const ConsulenteSchema = new mongoose.Schema({
   idWhatsapp: { type: String, default: '' },
   utente: { type: String, unique: true, required: true, trim: true },
   pass: { type: String, default: '' },
-  ruolo: { type: String, default: 'LISTING AGENT' }
+  ruolo: { type: String, default: 'LISTING AGENT' },
+  areeVisibili: { type: [String], default: [] },
+  consulentiVisibili: { type: [String], default: [] }
 }, { timestamps: true });
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
@@ -113,7 +115,7 @@ app.post('/api/login', async (req, res) => {
   try {
     const { utente, pass } = req.body;
     if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
-      return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin" } });
+      return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin", areeVisibili: [], consulentiVisibili: [] } });
     }
     const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
     if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
@@ -124,7 +126,7 @@ app.post('/api/login', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CONSULENTI (CON ELIMINAZIONE)
+   ROTTE API: CONSULENTI (CON ELIMINAZIONE E PERMESSI)
 ========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
@@ -143,6 +145,20 @@ app.delete('/api/consulenti/:id', async (req, res) => {
     if (!eliminato) return res.status(404).json({ error: 'Consulente non trovato' });
     res.status(200).json({ status: 'success', message: 'Consulente eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// AGGIORNA I PERMESSI (AREE VISIBILI + CONSULENTI VISIBILI) DI UN CONSULENTE
+app.put('/api/consulenti/:id/permessi', async (req, res) => {
+  try {
+    const { areeVisibili, consulentiVisibili } = req.body;
+    const aggiornato = await Consulente.findByIdAndUpdate(
+      req.params.id,
+      { $set: { areeVisibili: areeVisibili || [], consulentiVisibili: consulentiVisibili || [] } },
+      { new: true }
+    );
+    if (!aggiornato) return res.status(404).json({ error: 'Consulente non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 /* ==========================================
