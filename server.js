@@ -126,14 +126,27 @@ const ConcorrenzaSchema = new mongoose.Schema({
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
 /* ==========================================
-   5. NUOVO MODELLO: CAPITALE SOCIALE (ANAGRAFICA PROPRIETARI)
+   5. MODELLO AGGIORNATO: CAPITALE SOCIALE (CON STRUTTURA IMMOBILE NESTED)
 ========================================== */
+const ProprietaCollegataSchema = new mongoose.Schema({
+  paese: String,
+  via: String,
+  civico: String,
+  contesto: String,
+  foglio: String,
+  mappale: String,
+  sub: String,
+  piano: String,
+  mq: String
+});
+
 const CapitaleSocialeSchema = new mongoose.Schema({
   nome: { type: String, required: true },
   cf: { type: String, default: '' },
   tel: { type: String, default: '' },
   mail: { type: String, default: '' },
-  inseritoDa: { type: String, default: '' }
+  inseritoDa: { type: String, default: '' },
+  proprieta: [ProprietaCollegataSchema] // Subitems dedicati a contenere tutti i dati della casa
 }, { timestamps: true });
 const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
 
@@ -165,8 +178,8 @@ app.get('/api/consulenti', async (req, res) => {
 
 app.post('/api/consulenti', async (req, res) => {
   try {
-    const nuovo = new Consulente({ ...req.body, utente: req.body.utente.trim() });
-    res.status(201).json({ status: 'success', data: await nuovo.save() });
+    const nuevo = new Consulente({ ...req.body, utente: req.body.utente.trim() });
+    res.status(201).json({ status: 'success', data: await nuevo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
@@ -192,7 +205,7 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: TODO (CON ELIMINAZIONE)
+   ROTTE API: TODO
 ========================================== */
 app.get('/api/todo', async (req, res) => {
   try { res.status(200).json(await Todo.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
@@ -317,7 +330,7 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: NUOVE ROTTE PER CAPITALE SOCIALE
+   ROTTE API: CAPITALE SOCIALE CON INTEGRAZIONE INTELLIGENTE (UPSERT LOGIC)
 ========================================== */
 app.get('/api/capitale-sociale', async (req, res) => {
   try {
@@ -328,10 +341,43 @@ app.get('/api/capitale-sociale', async (req, res) => {
 
 app.post('/api/capitale-sociale', async (req, res) => {
   try {
-    const nuovo = new CapitaleSociale(req.body);
-    res.status(201).json({ status: 'success', data: await nuovo.save() });
+    const { nome, cf, tel, mail, inseritoDa, casaCensita } = req.body;
+    
+    // Se la chiamata proviene dall'automazione del citofono, verifichiamo la presenza duplicati
+    if (casaCensita) {
+      let proprietarioEsistente = await CapitaleSociale.findOne({ nome: nome });
+      
+      if (proprietarioEsistente) {
+        // Controlliamo che l'immobile non sia già salvato nella lista delle proprietà di questo utente
+        const giaPresente = proprietarioEsistente.proprieta.some(p => 
+          p.paese === casaCensita.paese && 
+          p.via === casaCensita.via && 
+          p.civico === casaCensita.civico && 
+          p.sub === casaCensita.sub
+        );
+        
+        if (!giaPresente) {
+          proprietarioEsistente.proprieta.push(casaCensita);
+          await proprietarioEsistente.save();
+        }
+        return res.status(200).json({ status: 'success', message: 'Immobile aggiunto a proprietario esistente.', data: proprietarioEsistente });
+      } else {
+        // Nuovo proprietario assoluto, creiamo il record con la prima casa dentro l'array
+        const nuovoRecord = new CapitaleSociale({
+          nome, cf, tel, mail, inseritoDa,
+          proprieta: [casaCensita]
+        });
+        await nuovoRecord.save();
+        return res.status(201).json({ status: 'success', message: 'Nuovo proprietario creato con immobile.', data: nuovoRecord });
+      }
+    }
+
+    // Inserimento manuale standard da bottone "+ Nuovo Inserimento"
+    const nuovoManuale = new CapitaleSociale(req.body);
+    res.status(201).json({ status: 'success', data: await nuovoManuale.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
+            
