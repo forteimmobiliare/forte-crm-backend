@@ -141,6 +141,26 @@ app.delete('/api/consulenti/:utente', async (req, res) => {
   }
 });
 
+// 6. LOGIN - VERIFICA CREDENZIALI DI ACCESSO
+app.post('/api/login', async (req, res) => {
+  try {
+    const { utente, pass } = req.body;
+    if (!utente || !pass) {
+      return res.status(400).json({ error: 'Username e password sono obbligatori' });
+    }
+    const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
+    if (!consulente || consulente.pass !== pass) {
+      return res.status(401).json({ error: 'Username o password errati' });
+    }
+    const { pass: _, ...datiSenzaPassword } = consulente.toObject();
+    console.log('Login effettuato con successo:', consulente.utente);
+    res.status(200).json({ status: 'success', data: datiSenzaPassword });
+  } catch (err) {
+    console.error('Errore durante il login:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* ==========================================
    AVVIO SERVER SULLA PORTA DI RENDER
 ========================================== */
