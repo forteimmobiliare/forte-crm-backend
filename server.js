@@ -73,6 +73,9 @@ const StradarioSchema = new mongoose.Schema({
         {
           numero: { type: String, required: true },
           note: { type: String, default: '' },
+          contestoCivico: { type: String, default: 'Palazzina' }, // Nuova tendina a livello civico
+          foglio: { type: String, default: '' },                 // Nuovo campo Foglio catastale
+          particella: { type: String, default: '' },             // Nuovo campo Particella catastale
           citofoni: [
             {
               nome: { type: String, default: '' },
@@ -133,7 +136,6 @@ app.post('/api/login', async (req, res) => {
     if (utente.trim().toLowerCase() === "admin" && pass === "Forte2026") {
       return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin", areeVisibili: [], consulentiVisibili: [] } });
     }
-    // RIPRISTINATO IDENTICO: rimosso il .toLowerCase() per evitare blocchi sulle maiuscole del database
     const consulente = await Consulente.findOne({ utente: utente.trim() });
     if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
     const datiSenzaPassword = consulente.toObject();
