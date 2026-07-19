@@ -190,10 +190,8 @@ app.put('/api/stradario/:comuneId', async (req, res) => {
 
 app.post('/api/stradario/nuovo-comune', async (req, res) => {
   try {
-    // Controllo duplicato lato server per massima sicurezza
     const esiste = await Stradario.findOne({ comune: req.body.comune });
-    if(esiste) return res.status(400).json({ error: "Questo comune è già presente nello stradario aziendale!" });
-    
+    if(esiste) return res.status(400).json({ error: "Questo comune è già presente!" });
     const nuovo = new Stradario(req.body);
     res.status(201).json({ status: 'success', data: await nuovo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
