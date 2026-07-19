@@ -53,6 +53,20 @@ const ObyBudgetSchema = new mongoose.Schema({
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
 /* ==========================================
+   MODELLO CONCORRENZA LIVE CLOUD
+========================================== */
+const ConcorrenzaSchema = new mongoose.Schema({
+  data: { type: String, required: true, default: '19/07/2026' },
+  agenzia: { type: String, required: true },
+  immobile: { type: String, default: '' },
+  prezzo: { type: String, default: '' },
+  linkAnnuncio: { type: String, default: '' },
+  consulente: { type: String, default: '' },
+  note: { type: String, default: '' }
+}, { timestamps: true });
+const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
+
+/* ==========================================
    MODELLO STRADARIO LIVE CLOUD
 ========================================== */
 const StradarioSchema = new mongoose.Schema({
@@ -143,6 +157,17 @@ app.get('/api/oby-budget/:consulente', async (req, res) => {
 
 app.post('/api/oby-budget', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await ObyBudget.findOneAndUpdate({ consulente: req.body.consulente }, { $set: req.body }, { new: true, upsert: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: CONCORRENZA (LIVE CLOUD)
+========================================== */
+app.get('/api/concorrenza', async (req, res) => {
+  try { res.status(200).json(await Concorrenza.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/concorrenza', async (req, res) => {
+  try { const nuovo = new Concorrenza(req.body); res.status(201).json({ status: 'success', data: await nuovo.save() }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 /* ==========================================
