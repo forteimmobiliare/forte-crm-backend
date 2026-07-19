@@ -113,7 +113,7 @@ app.post('/api/login', async (req, res) => {
       return res.status(200).json({ status: 'success', data: { nomeCognome: "Alessandro Forte (Master)", ruolo: "AMMINISTRATORE", utente: "admin" } });
     }
     const consulente = await Consulente.findOne({ utente: utente.trim().toLowerCase() });
-    if (!consultant = consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
+    if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
     const datiSenzaPassword = consulente.toObject();
     delete datiSenzaPassword.pass;
     res.status(200).json({ status: 'success', data: datiSenzaPassword });
