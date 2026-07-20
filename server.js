@@ -132,6 +132,30 @@ const ConcorrenzaSchema = new mongoose.Schema({
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
 /* ==========================================
+   4b. MODELLO CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
+========================================== */
+const CentralinoSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  tipoRichiesta: { type: String, default: '' },
+  stato: { type: String, default: 'Da Fare' },
+  telefonoCliente: { type: String, default: '' },
+  emailCliente: { type: String, default: '' },
+  whatsappInviato: { type: String, default: '' },
+  messaggioCliente: { type: String, default: '' },
+  riferimentoImmobile: { type: String, default: '' },
+  indirizzoImmobile: { type: String, default: '' },
+  descrizioneImmobile: { type: String, default: '' },
+  consulenteRiferimento: { type: String, default: '' },
+  cellConsulente: { type: String, default: '' },
+  linkCalendar: { type: String, default: '' },
+  linkImmobile: { type: String, default: '' },
+  linkWhatsapp: { type: String, default: '' },
+  portale: { type: String, default: '' },
+  dataRichiesta: { type: String, default: '' }
+}, { timestamps: true });
+const Centralino = mongoose.model('Centralino', CentralinoSchema);
+
+/* ==========================================
    5. MODELLO AGGIORNATO: CAPITALE SOCIALE (CON STRUTTURA IMMOBILE NESTED)
 ========================================== */
 const ProprietaCollegataSchema = new mongoose.Schema({
@@ -354,6 +378,45 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
     const eliminato = await Concorrenza.findByIdAndDelete(req.params.id);
     if (!eliminato) return res.status(404).json({ error: 'Annuncio non trovato' });
     res.status(200).json({ status: 'success', message: 'Annuncio eliminato con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
+========================================== */
+app.get('/api/centralino', async (req, res) => {
+  try {
+    const elenco = await Centralino.find({}).sort({ createdAt: -1 });
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/centralino', async (req, res) => {
+  try {
+    const nuovo = new Centralino(req.body);
+    res.status(201).json(await nuovo.save());
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/centralino/massivo', async (req, res) => {
+  try {
+    const inseriti = await Centralino.insertMany(req.body);
+    res.status(201).json({ status: 'success', count: inseriti.length });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/centralino/svuota', async (req, res) => {
+  try {
+    await Centralino.deleteMany({});
+    res.status(200).json({ status: 'success', message: 'Registro Chiamate azzerato' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/centralino/:id', async (req, res) => {
+  try {
+    const eliminato = await Centralino.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Chiamata non trovata' });
+    res.status(200).json({ status: 'success', message: 'Chiamata eliminata con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
