@@ -876,5 +876,33 @@ app.delete('/api/viste/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ==========================================
+   10. IMPOSTAZIONI COLONNE (VISIBILITÀ PER RUOLO CONSULENTE)
+========================================== */
+const ImpostazioneColonneSchema = new mongoose.Schema({
+  tabellaTipo: { type: String, required: true, unique: true },
+  colonneNascosteConsulenti: { type: [String], default: [] }
+}, { timestamps: true });
+const ImpostazioneColonne = mongoose.model('ImpostazioneColonne', ImpostazioneColonneSchema);
+
+app.get('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
+  try {
+    let doc = await ImpostazioneColonne.findOne({ tabellaTipo: req.params.tabellaTipo });
+    if (!doc) doc = { tabellaTipo: req.params.tabellaTipo, colonneNascosteConsulenti: [] };
+    res.status(200).json(doc);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
+  try {
+    const aggiornato = await ImpostazioneColonne.findOneAndUpdate(
+      { tabellaTipo: req.params.tabellaTipo },
+      { $set: { colonneNascosteConsulenti: req.body.colonneNascosteConsulenti || [] } },
+      { new: true, upsert: true }
+    );
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
