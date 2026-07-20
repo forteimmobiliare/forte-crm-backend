@@ -155,7 +155,7 @@ const ProprietaCollegataSchema = new mongoose.Schema({
   piano: String,
   vani: String,
   mq: String,
-  statoImmobile: { type: String, default: 'Residente' } // Residente | Vuoto | Locato | Abitato da Familiare
+  statoImmobile: { type: String, default: 'Residente' }
 });
 
 const CapitaleSocialeSchema = new mongoose.Schema({
@@ -171,7 +171,7 @@ const CapitaleSocialeSchema = new mongoose.Schema({
     x: { type: String, default: '' }
   },
   inseritoDa: { type: String, default: '' },
-  proprieta: [ProprietaCollegataSchema] // Subitems dedicati a contenere tutti i dati della casa
+  proprieta: [ProprietaCollegataSchema]
 }, { timestamps: true });
 const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
 
@@ -188,7 +188,7 @@ const UnitaRimossaSchema = new mongoose.Schema({
 const UnitaRimossa = mongoose.model('UnitaRimossa', UnitaRimossaSchema);
 
 /* ==========================================
-   7. MOTORE TABELLE PERSONALIZZATE (STILE MONDAY) WITH AREA CONTEXT
+   7. MOTORE TABELLE PERSONALIZZATE (STILE MONDAY)
 ========================================== */
 const ColonnaPersonalizzataSchema = new mongoose.Schema({
   nome: { type: String, required: true },
@@ -208,13 +208,12 @@ const TabellaPersonalizzataSchema = new mongoose.Schema({
   icona: { type: String, default: 'fa-table' },
   colonne: [ColonnaPersonalizzataSchema],
   righe: [RigaPersonalizzataSchema],
-  areaId: { type: String, default: '' } // Definisce in quale Area/SottoCartella si trova la tabella
+  areaId: { type: String, default: '' }
 }, { timestamps: true });
 const TabellaPersonalizzata = mongoose.model('TabellaPersonalizzata', TabellaPersonalizzataSchema);
 
-
 /* ==========================================
-   ROTTE NUOVE: GESTIONE AREE DINAMICHE
+   ROTTE API INTERNE STRUTTURA AREE DINAMICHE
 ========================================== */
 app.get('/api/aree-struttura', async (req, res) => {
   try { res.status(200).json(await StrutturaArea.find({}).sort({ createdAt: 1 })); }
@@ -242,6 +241,17 @@ app.put('/api/tabelle/:id/sposta', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+app.put('/api/aree-struttura/:id/gerarchia', async (req, res) => {
+  try {
+    const { parentId, tipo } = req.body;
+    const aggiornato = await StrutturaArea.findByIdAndUpdate(
+      req.params.id,
+      { $set: { parentId: parentId || null, tipo: tipo || 'area' } },
+      { new: true }
+    );
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 
 /* ==========================================
    ROTTE API INTERNE CORE & AUTENTICAZIONE
@@ -423,7 +433,7 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CAPITALE SOCIALE CON INTEGRAZIONE INTELLIGENTE
+   ROTTE API: CAPITALE SOCIALE
 ========================================== */
 app.get('/api/capitale-sociale', async (req, res) => {
   try {
@@ -441,10 +451,7 @@ app.post('/api/capitale-sociale', async (req, res) => {
 
       if (proprietarioEsistente) {
         const indiceEsistente = proprietarioEsistente.proprieta.findIndex(p =>
-          p.paese === casaCensita.paese &&
-          p.via === casaCensita.via &&
-          p.civico === casaCensita.civico &&
-          p.sub === casaCensita.sub
+          p.paese === casaCensita.paese && p.via === casaCensita.via && p.civico === casaCensita.civico && p.sub === casaCensita.sub
         );
 
         if (indiceEsistente === -1) {
@@ -456,8 +463,7 @@ app.post('/api/capitale-sociale', async (req, res) => {
         return res.status(200).json({ status: 'success', message: 'Anagrafica aggiornata.', data: proprietarioEsistente });
       } else {
         const nuovoRecord = new CapitaleSociale({
-          nome, cf, tel, mail, inseritoDa,
-          proprieta: [casaCensita]
+          nome, cf, tel, mail, inseritoDa, proprieta: [casaCensita]
         });
         await nuovoRecord.save();
         return res.status(201).json({ status: 'success', message: 'Nuovo proprietario creato con immobile.', data: nuovoRecord });
@@ -485,17 +491,13 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
 
     if (motivazione === 'Cambio Nominativo' && immobileRimosso) {
       await UnitaRimossa.create({
-        nomePrecedente: nome,
-        paese: immobileRimosso.paese, via: immobileRimosso.via, civico: immobileRimosso.civico,
-        contesto: immobileRimosso.contesto, foglio: immobileRimosso.foglio, mappale: immobileRimosso.mappale,
-        sub: immobileRimosso.sub, piano: immobileRimosso.piano, vani: immobileRimosso.vani, mq: immobileRimosso.mq,
-        motivazione, rimossoDa: rimossoDa || ''
+        nomePrecedente: nome, paese: immobileRimosso.paese, via: immobileRimosso.via, civico: immobileRimosso.civico, contesto: immobileRimosso.contesto, foglio: immobileRimosso.foglio, mappale: immobileRimosso.mappale, sub: immobileRimosso.sub, piano: immobileRimosso.piano, vani: immobileRimosso.vani, mq: immobileRimosso.mq, motivazione, rimossoDa: rimossoDa || ''
       });
     }
 
     if (proprietario.proprieta.length === 0) {
       await CapitaleSociale.findByIdAndDelete(proprietario._id);
-      return res.status(200).json({ status: 'success', message: 'Immobile rimosso e scheda eliminata (nessun altro immobile collegato).' });
+      return res.status(200).json({ status: 'success', message: 'Immobile rimosso e scheda eliminata.' });
     }
 
     await proprietario.save();
@@ -511,7 +513,6 @@ app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
     }
     const aggiornato = await CapitaleSociale.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
-    if (!aggiornato) return res.status(404).json({ error: 'Proprietario non trovato' });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -519,22 +520,16 @@ app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
 app.put('/api/capitale-sociale/:id/proprieta/:proprietaId', async (req, res) => {
   try {
     const proprietario = await CapitaleSociale.findById(req.params.id);
-    if (!proprietario) return res.status(404).json({ error: 'Proprietario non trovato' });
     const unita = proprietario.proprieta.id(req.params.proprietaId);
-    if (!unita) return res.status(404).json({ error: 'Unità non trovata' });
     if (req.body.statoImmobile !== undefined) unita.statoImmobile = req.body.statoImmobile;
     await proprietario.save();
     res.status(200).json({ status: 'success', data: proprietario });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-/* ==========================================
-   ROTTE API: ARCHIVIO UNITÀ RIMOSSE
-========================================== */
 app.get('/api/unita-rimosse', async (req, res) => {
-  try {
-    res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 }));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  try { res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /* ==========================================
@@ -546,11 +541,8 @@ app.get('/api/tabelle', async (req, res) => {
 });
 
 app.get('/api/tabelle/:id', async (req, res) => {
-  try {
-    const t = await TabellaPersonalizzata.findById(req.params.id);
-    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
-    res.status(200).json(t);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  try { res.status(200).json(await TabellaPersonalizzata.findById(req.params.id)); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/tabelle', async (req, res) => {
@@ -562,8 +554,7 @@ app.post('/api/tabelle', async (req, res) => {
 
 app.delete('/api/tabelle/:id', async (req, res) => {
   try {
-    const eliminata = await TabellaPersonalizzata.findByIdAndDelete(req.params.id);
-    if (!eliminata) return res.status(404).json({ error: 'Tabella non trouvata' });
+    await TabellaPersonalizzata.findByIdAndDelete(req.params.id);
     res.status(200).json({ status: 'success', message: 'Tabella eliminata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -571,7 +562,6 @@ app.delete('/api/tabelle/:id', async (req, res) => {
 app.post('/api/tabelle/:id/colonne', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
-    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.colonne.push(req.body);
     await t.save();
     res.status(201).json({ status: 'success', data: t });
@@ -581,7 +571,6 @@ app.post('/api/tabelle/:id/colonne', async (req, res) => {
 app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
-    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.colonne = t.colonne.filter(c => String(c._id) !== req.params.colonnaId);
     await t.save();
     res.status(200).json({ status: 'success', data: t });
@@ -591,7 +580,6 @@ app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
 app.post('/api/tabelle/:id/righe', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
-    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.righe.push({ valori: {} });
     await t.save();
     res.status(201).json({ status: 'success', data: t });
@@ -601,9 +589,7 @@ app.post('/api/tabelle/:id/righe', async (req, res) => {
 app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
-    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     const riga = t.righe.id(req.params.rigaId);
-    if (!riga) return res.status(404).json({ error: 'Riga non trovata' });
     const valori = { ...(riga.valori || {}) };
     valori[req.body.colonnaId] = req.body.valore;
     riga.valori = valori;
@@ -616,7 +602,6 @@ app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
 app.delete('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
-    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.righe = t.righe.filter(r => String(r._id) !== req.params.rigaId);
     await t.save();
     res.status(200).json({ status: 'success', data: t });
