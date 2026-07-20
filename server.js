@@ -86,7 +86,7 @@ const StradarioSchema = new mongoose.Schema({
               mq: { type: String, default: '' },
               nomeCognomeCf: { type: String, default: '' },
               nomeCognomeAnno: { type: String, default: '' },
-              proprietarioCollegatoId: { type: String, default: '' }
+              proprietariCollegatiIds: { type: [String], default: [] }
             }
           ],
           proprietariNonResidenti: [
@@ -96,8 +96,14 @@ const StradarioSchema = new mongoose.Schema({
               vani: { type: String, default: '' },
               sub: { type: String, default: '' },
               mq: { type: String, default: '' },
-              nomeCognomeCf: { type: String, default: '' },
-              nomeCognomeAnno: { type: String, default: '' }
+              proprietari: [
+                {
+                  _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
+                  nomeCognome: { type: String, default: '' },
+                  cf: { type: String, default: '' },
+                  annoNascita: { type: String, default: '' }
+                }
+              ]
             }
           ]
         }
