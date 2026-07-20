@@ -156,6 +156,51 @@ const CentralinoSchema = new mongoose.Schema({
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
 
 /* ==========================================
+   4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
+========================================== */
+const IncaricoSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  idElemento: { type: String, default: '' },
+  statoImmobile: { type: String, default: '' },
+  statoSecondario: { type: String, default: '' },
+  teamLeader: { type: String, default: '' },
+  listing: { type: String, default: '' },
+  buyer: { type: String, default: '' },
+  nomeVenditore: { type: String, default: '' },
+  residenzaVenditore: { type: String, default: '' },
+  telefonoVenditore: { type: String, default: '' },
+  posizione: { type: String, default: '' },
+  comune: { type: String, default: '' },
+  via: { type: String, default: '' },
+  civico: { type: String, default: '' },
+  nextOpenHouse: { type: String, default: '' },
+  prezzoIncarico: { type: String, default: '' },
+  tipologiaContratto: { type: String, default: '' },
+  prezzoValutazione: { type: String, default: '' },
+  provvigioneVenditore: { type: String, default: '' },
+  dataIncarico: { type: String, default: '' },
+  dataScadenza: { type: String, default: '' },
+  contesto: { type: String, default: '' },
+  tipologiaUnita: { type: String, default: '' },
+  ascensore: { type: String, default: '' },
+  locali: { type: String, default: '' },
+  piano: { type: String, default: '' },
+  mq: { type: String, default: '' },
+  bagni: { type: String, default: '' },
+  box: { type: String, default: '' },
+  mqBox: { type: String, default: '' },
+  classeApe: { type: String, default: '' },
+  ipeApe: { type: String, default: '' },
+  speseCondominiali: { type: String, default: '' },
+  testoAnnuncio: { type: String, default: '' },
+  linkVideo: { type: String, default: '' },
+  linkVirtualTour: { type: String, default: '' },
+  linkDocumenti: { type: String, default: '' },
+  foto: { type: String, default: '' }
+}, { timestamps: true });
+const Incarico = mongoose.model('Incarico', IncaricoSchema);
+
+/* ==========================================
    5. MODELLO AGGIORNATO: CAPITALE SOCIALE (CON STRUTTURA IMMOBILE NESTED)
 ========================================== */
 const ProprietaCollegataSchema = new mongoose.Schema({
@@ -417,6 +462,45 @@ app.delete('/api/centralino/:id', async (req, res) => {
     const eliminato = await Centralino.findByIdAndDelete(req.params.id);
     if (!eliminato) return res.status(404).json({ error: 'Chiamata non trovata' });
     res.status(200).json({ status: 'success', message: 'Chiamata eliminata con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: INCARICHI GESTIONE MANUALE ED EXCEL
+========================================== */
+app.get('/api/incarichi', async (req, res) => {
+  try {
+    const elenco = await Incarico.find({}).sort({ createdAt: -1 });
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/incarichi', async (req, res) => {
+  try {
+    const nuovo = new Incarico(req.body);
+    res.status(201).json(await nuovo.save());
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/incarichi/massivo', async (req, res) => {
+  try {
+    const inseriti = await Incarico.insertMany(req.body);
+    res.status(201).json({ status: 'success', count: inseriti.length });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/incarichi/svuota', async (req, res) => {
+  try {
+    await Incarico.deleteMany({});
+    res.status(200).json({ status: 'success', message: 'Incarichi azzerati' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/incarichi/:id', async (req, res) => {
+  try {
+    const eliminato = await Incarico.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Incarico non trovato' });
+    res.status(200).json({ status: 'success', message: 'Incarico eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
