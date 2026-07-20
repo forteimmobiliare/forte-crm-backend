@@ -477,7 +477,18 @@ app.get('/api/incarichi', async (req, res) => {
 
 app.post('/api/incarichi', async (req, res) => {
   try {
-    const nuovo = new Incarico(req.body);
+    let payload = { ...req.body };
+    // Codice automatico ID-1, ID-2, ... solo se non è stato specificato (l'import Excel porta già i suoi codici IF-XX)
+    if (!payload.idElemento || !payload.idElemento.toString().trim()) {
+      const esistenti = await Incarico.find({ idElemento: /^ID-\d+$/ });
+      let maxN = 0;
+      esistenti.forEach(e => {
+        const m = e.idElemento.match(/^ID-(\d+)$/);
+        if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+      });
+      payload.idElemento = `ID-${maxN + 1}`;
+    }
+    const nuovo = new Incarico(payload);
     res.status(201).json(await nuovo.save());
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -486,6 +497,16 @@ app.post('/api/incarichi/massivo', async (req, res) => {
   try {
     const inseriti = await Incarico.insertMany(req.body);
     res.status(201).json({ status: 'success', count: inseriti.length });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Modifica generica di un campo (usata per l'editing inline nella tabella)
+app.put('/api/incarichi/:id', async (req, res) => {
+  try {
+    const { campo, valore } = req.body;
+    const aggiornato = await Incarico.findByIdAndUpdate(req.params.id, { $set: { [campo]: valore } }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Incarico non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
@@ -807,6 +828,51 @@ app.delete('/api/aree-cartella/:id', async (req, res) => {
     await AreaCartella.updateMany({ parentId: req.params.id }, { $set: { parentId: '' } });
     await TabellaPersonalizzata.updateMany({ areaCartellaId: req.params.id }, { $set: { areaCartellaId: '' } });
     res.status(200).json({ status: 'success', message: 'Area eliminata' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   9. MOTORE VISTE (RAGGRUPPAMENTO, FILTRI, COLONNE VISIBILI PER SCHEDA)
+========================================== */
+const VistaSchema = new mongoose.Schema({
+  tabellaTipo: { type: String, required: true }, // es. 'incarichi', 'centralino', oppure l'id di una tabella personalizzata
+  nome: { type: String, required: true },
+  raggruppaPer: { type: String, default: '' },
+  colonneNascoste: { type: [String], default: [] },
+  filtroColonna: { type: String, default: '' },
+  filtroValore: { type: String, default: '' },
+  ordine: { type: Number, default: 0 }
+}, { timestamps: true });
+const Vista = mongoose.model('Vista', VistaSchema);
+
+app.get('/api/viste', async (req, res) => {
+  try {
+    const filtro = req.query.tabellaTipo ? { tabellaTipo: req.query.tabellaTipo } : {};
+    res.status(200).json(await Vista.find(filtro).sort({ ordine: 1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/viste', async (req, res) => {
+  try {
+    const conteggio = await Vista.countDocuments({ tabellaTipo: req.body.tabellaTipo });
+    const nuova = new Vista({ ...req.body, ordine: conteggio });
+    res.status(201).json({ status: 'success', data: await nuova.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/viste/:id', async (req, res) => {
+  try {
+    const aggiornata = await Vista.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!aggiornata) return res.status(404).json({ error: 'Vista non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornata });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/viste/:id', async (req, res) => {
+  try {
+    const eliminata = await Vista.findByIdAndDelete(req.params.id);
+    if (!eliminata) return res.status(404).json({ error: 'Vista non trovata' });
+    res.status(200).json({ status: 'success', message: 'Vista eliminata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
