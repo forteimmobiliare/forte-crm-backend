@@ -484,5 +484,119 @@ app.get('/api/unita-rimosse', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ==========================================
+   7. MOTORE TABELLE PERSONALIZZATE (STILE MONDAY)
+   Tipi di colonna: testo | numero | email | telefono | data | select | collegamento | specchio
+========================================== */
+const ColonnaPersonalizzataSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  tipo: { type: String, required: true },
+  opzioniSelect: { type: [String], default: [] },
+  // Per tipo 'collegamento': a quale altra tabella punta
+  tabellaCollegataId: { type: String, default: '' },
+  // Per tipo 'specchio': quale colonna 'collegamento' di QUESTA tabella seguire,
+  // e quale colonna della tabella collegata mostrare
+  colonnaCollegamentoId: { type: String, default: '' },
+  colonnaDaMostrareId: { type: String, default: '' }
+});
+
+const RigaPersonalizzataSchema = new mongoose.Schema({
+  valori: { type: mongoose.Schema.Types.Mixed, default: {} } // { colonnaId: valore (stringa, o array per 'collegamento') }
+}, { timestamps: true });
+
+const TabellaPersonalizzataSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  icona: { type: String, default: 'fa-table' },
+  colonne: [ColonnaPersonalizzataSchema],
+  righe: [RigaPersonalizzataSchema]
+}, { timestamps: true });
+const TabellaPersonalizzata = mongoose.model('TabellaPersonalizzata', TabellaPersonalizzataSchema);
+
+/* ==========================================
+   ROTTE API: TABELLE PERSONALIZZATE
+========================================== */
+app.get('/api/tabelle', async (req, res) => {
+  try { res.status(200).json(await TabellaPersonalizzata.find({}).sort({ nome: 1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/tabelle/:id', async (req, res) => {
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    res.status(200).json(t);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/tabelle', async (req, res) => {
+  try {
+    const nuova = new TabellaPersonalizzata({ nome: req.body.nome, icona: req.body.icona || 'fa-table', colonne: [], righe: [] });
+    res.status(201).json({ status: 'success', data: await nuova.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/tabelle/:id', async (req, res) => {
+  try {
+    const eliminata = await TabellaPersonalizzata.findByIdAndDelete(req.params.id);
+    if (!eliminata) return res.status(404).json({ error: 'Tabella non trovata' });
+    res.status(200).json({ status: 'success', message: 'Tabella eliminata' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/tabelle/:id/colonne', async (req, res) => {
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    t.colonne.push(req.body);
+    await t.save();
+    res.status(201).json({ status: 'success', data: t });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    t.colonne = t.colonne.filter(c => String(c._id) !== req.params.colonnaId);
+    await t.save();
+    res.status(200).json({ status: 'success', data: t });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.post('/api/tabelle/:id/righe', async (req, res) => {
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    t.righe.push({ valori: {} });
+    await t.save();
+    res.status(201).json({ status: 'success', data: t });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    const riga = t.righe.id(req.params.rigaId);
+    if (!riga) return res.status(404).json({ error: 'Riga non trovata' });
+    const valori = { ...(riga.valori || {}) };
+    valori[req.body.colonnaId] = req.body.valore;
+    riga.valori = valori;
+    riga.markModified('valori');
+    await t.save();
+    res.status(200).json({ status: 'success', data: t });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    t.righe = t.righe.filter(r => String(r._id) !== req.params.rigaId);
+    await t.save();
+    res.status(200).json({ status: 'success', data: t });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
