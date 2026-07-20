@@ -16,16 +16,6 @@ mongoose.connect(mongoURI)
   .catch((err) => console.error('Errore critico di connessione DB:', err));
 
 /* ==========================================
-   NATIVE / AGGIUNTE: STRUTTURA AREE DINAMICHE
-========================================== */
-const StrutturaAreaSchema = new mongoose.Schema({
-  nome: { type: String, required: true },
-  tipo: { type: String, enum: ['area', 'sottocartella'], required: true },
-  parentId: { type: String, default: null } // Se è una sotto-cartella, punta all'Id dell'area padre
-}, { timestamps: true });
-const StrutturaArea = mongoose.model('StrutturaArea', StrutturaAreaSchema);
-
-/* ==========================================
    1. MODELLI DATABASE CORE (CONSULENTI & TASK)
 ========================================== */
 const ConsulenteSchema = new mongoose.Schema({
@@ -155,7 +145,7 @@ const ProprietaCollegataSchema = new mongoose.Schema({
   piano: String,
   vani: String,
   mq: String,
-  statoImmobile: { type: String, default: 'Residente' }
+  statoImmobile: { type: String, default: 'Residente' } // Residente | Vuoto | Locato | Abitato da Familiare
 });
 
 const CapitaleSocialeSchema = new mongoose.Schema({
@@ -171,7 +161,7 @@ const CapitaleSocialeSchema = new mongoose.Schema({
     x: { type: String, default: '' }
   },
   inseritoDa: { type: String, default: '' },
-  proprieta: [ProprietaCollegataSchema]
+  proprieta: [ProprietaCollegataSchema] // Subitems dedicati a contenere tutti i dati della casa
 }, { timestamps: true });
 const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
 
@@ -188,72 +178,6 @@ const UnitaRimossaSchema = new mongoose.Schema({
 const UnitaRimossa = mongoose.model('UnitaRimossa', UnitaRimossaSchema);
 
 /* ==========================================
-   7. MOTORE TABELLE PERSONALIZZATE (STILE MONDAY)
-========================================== */
-const ColonnaPersonalizzataSchema = new mongoose.Schema({
-  nome: { type: String, required: true },
-  tipo: { type: String, required: true },
-  opzioniSelect: { type: [String], default: [] },
-  tabellaCollegataId: { type: String, default: '' },
-  colonnaCollegamentoId: { type: String, default: '' },
-  colonnaDaMostrareId: { type: String, default: '' }
-});
-
-const RigaPersonalizzataSchema = new mongoose.Schema({
-  valori: { type: mongoose.Schema.Types.Mixed, default: {} }
-}, { timestamps: true });
-
-const TabellaPersonalizzataSchema = new mongoose.Schema({
-  nome: { type: String, required: true },
-  icona: { type: String, default: 'fa-table' },
-  colonne: [ColonnaPersonalizzataSchema],
-  righe: [RigaPersonalizzataSchema],
-  areaId: { type: String, default: '' }
-}, { timestamps: true });
-const TabellaPersonalizzata = mongoose.model('TabellaPersonalizzata', TabellaPersonalizzataSchema);
-
-/* ==========================================
-   ROTTE API INTERNE STRUTTURA AREE DINAMICHE
-========================================== */
-app.get('/api/aree-struttura', async (req, res) => {
-  try { res.status(200).json(await StrutturaArea.find({}).sort({ createdAt: 1 })); }
-  catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.post('/api/aree-struttura', async (req, res) => {
-  try {
-    const nuovaArea = new StrutturaArea(req.body);
-    res.status(201).json({ status: 'success', data: await nuovaArea.save() });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.delete('/api/aree-struttura/:id', async (req, res) => {
-  try {
-    await StrutturaArea.findByIdAndDelete(req.params.id);
-    res.status(200).json({ status: 'success', message: 'Area/Sotto-cartella rimossa' });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.put('/api/tabelle/:id/sposta', async (req, res) => {
-  try {
-    const t = await TabellaPersonalizzata.findByIdAndUpdate(req.params.id, { $set: { areaId: req.body.areaId } }, { new: true });
-    res.status(200).json({ status: 'success', data: t });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-app.put('/api/aree-struttura/:id/gerarchia', async (req, res) => {
-  try {
-    const { parentId, tipo } = req.body;
-    const aggiornato = await StrutturaArea.findByIdAndUpdate(
-      req.params.id,
-      { $set: { parentId: parentId || null, tipo: tipo || 'area' } },
-      { new: true }
-    );
-    res.status(200).json({ status: 'success', data: aggiornato });
-  } catch (err) { res.status(400).json({ error: err.message }); }
-});
-
-/* ==========================================
    ROTTE API INTERNE CORE & AUTENTICAZIONE
 ========================================== */
 app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Backend attivo e integro al 100%' }));
@@ -268,7 +192,7 @@ app.post('/api/login', async (req, res) => {
     if (!consulente || consulente.pass !== pass) return res.status(401).json({ error: 'Username o password errati' });
     const datiSenzaPassword = consulente.toObject();
     delete datiSenzaPassword.pass;
-    res.status(200).json({ status: 'success', data: datiSenzaPassword });
+    res.status(200).json({ status: 'success', data: dataSenzaPassword });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -433,7 +357,7 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
 });
 
 /* ==========================================
-   ROTTE API: CAPITALE SOCIALE
+   ROTTE API: CAPITALE SOCIALE CON INTEGRAZIONE INTELLIGENTE (UPSERT LOGIC)
 ========================================== */
 app.get('/api/capitale-sociale', async (req, res) => {
   try {
@@ -446,35 +370,50 @@ app.post('/api/capitale-sociale', async (req, res) => {
   try {
     const { nome, cf, tel, mail, inseritoDa, casaCensita } = req.body;
 
+    // Se la chiamata proviene dall'automazione del citofono, verifichiamo la presenza duplicati
     if (casaCensita) {
       let proprietarioEsistente = await CapitaleSociale.findOne({ nome: nome });
 
       if (proprietarioEsistente) {
+        // Controlliamo se l'immobile è già salvato nella lista delle proprietà di questo utente
         const indiceEsistente = proprietarioEsistente.proprieta.findIndex(p =>
-          p.paese === casaCensita.paese && p.via === casaCensita.via && p.civico === casaCensita.civico && p.sub === casaCensita.sub
+          p.paese === casaCensita.paese &&
+          p.via === casaCensita.via &&
+          p.civico === casaCensita.civico &&
+          p.sub === casaCensita.sub
         );
 
         if (indiceEsistente === -1) {
+          // Immobile nuovo per questo proprietario: lo aggiungiamo
           proprietarioEsistente.proprieta.push(casaCensita);
         } else {
+          // Immobile già collegato: aggiorniamo sempre i suoi dettagli con quelli più recenti
           proprietarioEsistente.proprieta[indiceEsistente].set(casaCensita);
         }
         await proprietarioEsistente.save();
         return res.status(200).json({ status: 'success', message: 'Anagrafica aggiornata.', data: proprietarioEsistente });
       } else {
+        // Nuovo proprietario assoluto, creiamo il record con la prima casa dentro l'array
         const nuovoRecord = new CapitaleSociale({
-          nome, cf, tel, mail, inseritoDa, proprieta: [casaCensita]
+          nome, cf, tel, mail, inseritoDa,
+          proprieta: [casaCensita]
         });
         await nuovoRecord.save();
         return res.status(201).json({ status: 'success', message: 'Nuovo proprietario creato con immobile.', data: nuovoRecord });
       }
     }
 
+    // Inserimento manuale standard da bottone "+ Nuovo Inserimento"
     const nuovoManuale = new CapitaleSociale(req.body);
     res.status(201).json({ status: 'success', data: await nuovoManuale.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Rimuove un immobile specifico dalla scheda di un proprietario (usato quando si rinomina
+// un nominativo o si toglie un collegamento citofono-proprietari, per non lasciare schede "orfane").
+// Se la motivazione è "Cambio Nominativo", l'unità rimossa viene archiviata in Unità Rimosse
+// (utile per capire quali immobili sono stati venduti/passati ad altro proprietario).
+// Se dopo la rimozione il proprietario non ha più nessun immobile collegato, la scheda viene eliminata.
 app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
   try {
     const { nome, paese, via, civico, sub, motivazione, rimossoDa } = req.body;
@@ -491,13 +430,17 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
 
     if (motivazione === 'Cambio Nominativo' && immobileRimosso) {
       await UnitaRimossa.create({
-        nomePrecedente: nome, paese: immobileRimosso.paese, via: immobileRimosso.via, civico: immobileRimosso.civico, contesto: immobileRimosso.contesto, foglio: immobileRimosso.foglio, mappale: immobileRimosso.mappale, sub: immobileRimosso.sub, piano: immobileRimosso.piano, vani: immobileRimosso.vani, mq: immobileRimosso.mq, motivazione, rimossoDa: rimossoDa || ''
+        nomePrecedente: nome,
+        paese: immobileRimosso.paese, via: immobileRimosso.via, civico: immobileRimosso.civico,
+        contesto: immobileRimosso.contesto, foglio: immobileRimosso.foglio, mappale: immobileRimosso.mappale,
+        sub: immobileRimosso.sub, piano: immobileRimosso.piano, vani: immobileRimosso.vani, mq: immobileRimosso.mq,
+        motivazione, rimossoDa: rimossoDa || ''
       });
     }
 
     if (proprietario.proprieta.length === 0) {
       await CapitaleSociale.findByIdAndDelete(proprietario._id);
-      return res.status(200).json({ status: 'success', message: 'Immobile rimosso e scheda eliminata.' });
+      return res.status(200).json({ status: 'success', message: 'Immobile rimosso e scheda eliminata (nessun altro immobile collegato).' });
     }
 
     await proprietario.save();
@@ -505,6 +448,7 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Modifica i dettagli anagrafici di un proprietario già censito (data nascita, telefono, mail, social)
 app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
   try {
     const campiConsentiti = ['dataNascita', 'tel', 'mail', 'social', 'cf'];
@@ -513,24 +457,61 @@ app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
     }
     const aggiornato = await CapitaleSociale.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Proprietario non trovato' });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Modifica lo Stato Immobile (Residente / Vuoto / Locato / Abitato da Familiare) di una specifica unità
 app.put('/api/capitale-sociale/:id/proprieta/:proprietaId', async (req, res) => {
   try {
     const proprietario = await CapitaleSociale.findById(req.params.id);
+    if (!proprietario) return res.status(404).json({ error: 'Proprietario non trovato' });
     const unita = proprietario.proprieta.id(req.params.proprietaId);
+    if (!unita) return res.status(404).json({ error: 'Unità non trovata' });
     if (req.body.statoImmobile !== undefined) unita.statoImmobile = req.body.statoImmobile;
     await proprietario.save();
     res.status(200).json({ status: 'success', data: proprietario });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+/* ==========================================
+   ROTTE API: ARCHIVIO UNITÀ RIMOSSE
+========================================== */
 app.get('/api/unita-rimosse', async (req, res) => {
-  try { res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 })); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+/* ==========================================
+   7. MOTORE TABELLE PERSONALIZZATE (STILE MONDAY)
+   Tipi di colonna: testo | numero | email | telefono | data | select | collegamento | specchio
+========================================== */
+const ColonnaPersonalizzataSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  tipo: { type: String, required: true },
+  opzioniSelect: { type: [String], default: [] },
+  // Per tipo 'collegamento': a quale altra tabella punta
+  tabellaCollegataId: { type: String, default: '' },
+  // Per tipo 'specchio': quale colonna 'collegamento' di QUESTA tabella seguire,
+  // e quale colonna della tabella collegata mostrare
+  colonnaCollegamentoId: { type: String, default: '' },
+  colonnaDaMostrareId: { type: String, default: '' }
+});
+
+const RigaPersonalizzataSchema = new mongoose.Schema({
+  valori: { type: mongoose.Schema.Types.Mixed, default: {} } // { colonnaId: valore (stringa, o array per 'collegamento') }
+}, { timestamps: true });
+
+const TabellaPersonalizzataSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  icona: { type: String, default: 'fa-table' },
+  colonne: [ColonnaPersonalizzataSchema],
+  righe: [RigaPersonalizzataSchema],
+  areaId: { type: String, default: '' } // <--- AGGIUNTO PER SPOSTAMENTO
+}, { timestamps: true });
+const TabellaPersonalizzata = mongoose.model('TabellaPersonalizzata', TabellaPersonalizzataSchema);
 
 /* ==========================================
    ROTTE API: TABELLE PERSONALIZZATE
@@ -541,8 +522,11 @@ app.get('/api/tabelle', async (req, res) => {
 });
 
 app.get('/api/tabelle/:id', async (req, res) => {
-  try { res.status(200).json(await TabellaPersonalizzata.findById(req.params.id)); }
-  catch (err) { res.status(500).json({ error: err.message }); }
+  try {
+    const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
+    res.status(200).json(t);
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/tabelle', async (req, res) => {
@@ -554,7 +538,8 @@ app.post('/api/tabelle', async (req, res) => {
 
 app.delete('/api/tabelle/:id', async (req, res) => {
   try {
-    await TabellaPersonalizzata.findByIdAndDelete(req.params.id);
+    const eliminata = await TabellaPersonalizzata.findByIdAndDelete(req.params.id);
+    if (!eliminata) return res.status(404).json({ error: 'Tabella non trovata' });
     res.status(200).json({ status: 'success', message: 'Tabella eliminata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -562,6 +547,7 @@ app.delete('/api/tabelle/:id', async (req, res) => {
 app.post('/api/tabelle/:id/colonne', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.colonne.push(req.body);
     await t.save();
     res.status(201).json({ status: 'success', data: t });
@@ -571,6 +557,7 @@ app.post('/api/tabelle/:id/colonne', async (req, res) => {
 app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.colonne = t.colonne.filter(c => String(c._id) !== req.params.colonnaId);
     await t.save();
     res.status(200).json({ status: 'success', data: t });
@@ -580,6 +567,7 @@ app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
 app.post('/api/tabelle/:id/righe', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.righe.push({ valori: {} });
     await t.save();
     res.status(201).json({ status: 'success', data: t });
@@ -589,7 +577,9 @@ app.post('/api/tabelle/:id/righe', async (req, res) => {
 app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     const riga = t.righe.id(req.params.rigaId);
+    if (!riga) return res.status(404).json({ error: 'Riga non trovata' });
     const valori = { ...(riga.valori || {}) };
     valori[req.body.colonnaId] = req.body.valore;
     riga.valori = valori;
@@ -602,10 +592,42 @@ app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
 app.delete('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
+    if (!t) return res.status(404).json({ error: 'Tabella non trovata' });
     t.righe = t.righe.filter(r => String(r._id) !== req.params.rigaId);
     await t.save();
     res.status(200).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE EXTRA INNESTATE PER COMPATIBILITÀ DRAG/DROP AREE
+========================================== */
+const StrutturaAreaSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  tipo: { type: String, enum: ['area', 'sottocartella'], required: true },
+  parentId: { type: String, default: null }
+}, { timestamps: true });
+const StrutturaArea = mongoose.model('StrutturaArea', StrutturaAreaSchema);
+
+app.get('/api/aree-struttura', async (req, res) => {
+  try { res.status(200).json(await StrutturaArea.find({}).sort({ createdAt: 1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/aree-struttura', async (req, res) => {
+  try { res.status(201).json({ status: 'success', data: await new StrutturaArea(req.body).save() }); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.delete('/api/aree-struttura/:id', async (req, res) => {
+  try { await StrutturaArea.findByIdAndDelete(req.params.id); res.status(200).json({ status: 'success' }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.put('/api/tabelle/:id/sposta', async (req, res) => {
+  try { res.status(200).json({ status: 'success', data: await TabellaPersonalizzata.findByIdAndUpdate(req.params.id, { $set: { areaId: req.body.areaId } }, { new: true }) }); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/aree-struttura/:id/gerarchia', async (req, res) => {
+  try { res.status(200).json({ status: 'success', data: await StrutturaArea.findByIdAndUpdate(req.params.id, { $set: { parentId: req.body.parentId || null, tipo: req.body.tipo || 'area' } }, { new: true }) }); }
+  catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
