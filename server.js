@@ -79,7 +79,7 @@ const StradarioSchema = new mongoose.Schema({
           citofoni: [
             {
               nome: { type: String, default: '' },
-              statoProprietario: { type: String, default: 'Proprietario Residente' },
+              statoProprietario: { type: String, default: '' },
               piano: { type: String, default: '' },
               vani: { type: String, default: '' },
               sub: { type: String, default: '' },
