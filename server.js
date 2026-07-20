@@ -143,18 +143,39 @@ const ProprietaCollegataSchema = new mongoose.Schema({
   mappale: String,
   sub: String,
   piano: String,
-  mq: String
+  vani: String,
+  mq: String,
+  statoImmobile: { type: String, default: 'Residente' } // Residente | Vuoto | Locato | Abitato da Familiare
 });
 
 const CapitaleSocialeSchema = new mongoose.Schema({
   nome: { type: String, required: true },
   cf: { type: String, default: '' },
+  dataNascita: { type: String, default: '' },
   tel: { type: String, default: '' },
   mail: { type: String, default: '' },
+  social: {
+    facebook: { type: String, default: '' },
+    instagram: { type: String, default: '' },
+    linkedin: { type: String, default: '' },
+    x: { type: String, default: '' }
+  },
   inseritoDa: { type: String, default: '' },
   proprieta: [ProprietaCollegataSchema] // Subitems dedicati a contenere tutti i dati della casa
 }, { timestamps: true });
 const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
+
+/* ==========================================
+   6. MODELLO ARCHIVIO UNITÀ RIMOSSE (SOLO SE CAMBIO NOMINATIVO)
+========================================== */
+const UnitaRimossaSchema = new mongoose.Schema({
+  nomePrecedente: { type: String, required: true },
+  paese: String, via: String, civico: String, contesto: String,
+  foglio: String, mappale: String, sub: String, piano: String, vani: String, mq: String,
+  motivazione: { type: String, default: 'Cambio Nominativo' },
+  rimossoDa: { type: String, default: '' }
+}, { timestamps: true });
+const UnitaRimossa = mongoose.model('UnitaRimossa', UnitaRimossaSchema);
 
 /* ==========================================
    ROTTE API INTERNE CORE & AUTENTICAZIONE
@@ -389,17 +410,33 @@ app.post('/api/capitale-sociale', async (req, res) => {
 });
 
 // Rimuove un immobile specifico dalla scheda di un proprietario (usato quando si rinomina
-// un nominativo o si cambia il subalterno di un citofono, per non lasciare schede "orfane").
+// un nominativo o si toglie un collegamento citofono-proprietari, per non lasciare schede "orfane").
+// Se la motivazione è "Cambio Nominativo", l'unità rimossa viene archiviata in Unità Rimosse
+// (utile per capire quali immobili sono stati venduti/passati ad altro proprietario).
 // Se dopo la rimozione il proprietario non ha più nessun immobile collegato, la scheda viene eliminata.
 app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
   try {
-    const { nome, paese, via, civico, sub } = req.body;
+    const { nome, paese, via, civico, sub, motivazione, rimossoDa } = req.body;
     const proprietario = await CapitaleSociale.findOne({ nome });
     if (!proprietario) return res.status(200).json({ status: 'success', message: 'Proprietario non trovato, nulla da rimuovere.' });
+
+    const immobileRimosso = proprietario.proprieta.find(p =>
+      p.paese === paese && p.via === via && p.civico === civico && p.sub === sub
+    );
 
     proprietario.proprieta = proprietario.proprieta.filter(p =>
       !(p.paese === paese && p.via === via && p.civico === civico && p.sub === sub)
     );
+
+    if (motivazione === 'Cambio Nominativo' && immobileRimosso) {
+      await UnitaRimossa.create({
+        nomePrecedente: nome,
+        paese: immobileRimosso.paese, via: immobileRimosso.via, civico: immobileRimosso.civico,
+        contesto: immobileRimosso.contesto, foglio: immobileRimosso.foglio, mappale: immobileRimosso.mappale,
+        sub: immobileRimosso.sub, piano: immobileRimosso.piano, vani: immobileRimosso.vani, mq: immobileRimosso.mq,
+        motivazione, rimossoDa: rimossoDa || ''
+      });
+    }
 
     if (proprietario.proprieta.length === 0) {
       await CapitaleSociale.findByIdAndDelete(proprietario._id);
@@ -409,6 +446,42 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
     await proprietario.save();
     res.status(200).json({ status: 'success', message: 'Immobile rimosso dal proprietario.', data: proprietario });
   } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Modifica i dettagli anagrafici di un proprietario già censito (data nascita, telefono, mail, social)
+app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
+  try {
+    const campiConsentiti = ['dataNascita', 'tel', 'mail', 'social', 'cf'];
+    const aggiornamento = {};
+    for (const campo of campiConsentiti) {
+      if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
+    }
+    const aggiornato = await CapitaleSociale.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Proprietario non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Modifica lo Stato Immobile (Residente / Vuoto / Locato / Abitato da Familiare) di una specifica unità
+app.put('/api/capitale-sociale/:id/proprieta/:proprietaId', async (req, res) => {
+  try {
+    const proprietario = await CapitaleSociale.findById(req.params.id);
+    if (!proprietario) return res.status(404).json({ error: 'Proprietario non trovato' });
+    const unita = proprietario.proprieta.id(req.params.proprietaId);
+    if (!unita) return res.status(404).json({ error: 'Unità non trovata' });
+    if (req.body.statoImmobile !== undefined) unita.statoImmobile = req.body.statoImmobile;
+    await proprietario.save();
+    res.status(200).json({ status: 'success', data: proprietario });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: ARCHIVIO UNITÀ RIMOSSE
+========================================== */
+app.get('/api/unita-rimosse', async (req, res) => {
+  try {
+    res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 const PORT = process.env.PORT || 10000;
