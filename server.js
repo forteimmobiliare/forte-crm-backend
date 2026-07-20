@@ -342,25 +342,29 @@ app.get('/api/capitale-sociale', async (req, res) => {
 app.post('/api/capitale-sociale', async (req, res) => {
   try {
     const { nome, cf, tel, mail, inseritoDa, casaCensita } = req.body;
-    
+
     // Se la chiamata proviene dall'automazione del citofono, verifichiamo la presenza duplicati
     if (casaCensita) {
       let proprietarioEsistente = await CapitaleSociale.findOne({ nome: nome });
-      
+
       if (proprietarioEsistente) {
-        // Controlliamo che l'immobile non sia già salvato nella lista delle proprietà di questo utente
-        const giaPresente = proprietarioEsistente.proprieta.some(p => 
-          p.paese === casaCensita.paese && 
-          p.via === casaCensita.via && 
-          p.civico === casaCensita.civico && 
+        // Controlliamo se l'immobile è già salvato nella lista delle proprietà di questo utente
+        const indiceEsistente = proprietarioEsistente.proprieta.findIndex(p =>
+          p.paese === casaCensita.paese &&
+          p.via === casaCensita.via &&
+          p.civico === casaCensita.civico &&
           p.sub === casaCensita.sub
         );
-        
-        if (!giaPresente) {
+
+        if (indiceEsistente === -1) {
+          // Immobile nuovo per questo proprietario: lo aggiungiamo
           proprietarioEsistente.proprieta.push(casaCensita);
-          await proprietarioEsistente.save();
+        } else {
+          // Immobile già collegato: aggiorniamo sempre i suoi dettagli con quelli più recenti
+          proprietarioEsistente.proprieta[indiceEsistente].set(casaCensita);
         }
-        return res.status(200).json({ status: 'success', message: 'Immobile aggiunto a proprietario esistente.', data: proprietarioEsistente });
+        await proprietarioEsistente.save();
+        return res.status(200).json({ status: 'success', message: 'Anagrafica aggiornata.', data: proprietarioEsistente });
       } else {
         // Nuovo proprietario assoluto, creiamo il record con la prima casa dentro l'array
         const nuovoRecord = new CapitaleSociale({
@@ -378,6 +382,28 @@ app.post('/api/capitale-sociale', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+// Rimuove un immobile specifico dalla scheda di un proprietario (usato quando si rinomina
+// un nominativo o si cambia il subalterno di un citofono, per non lasciare schede "orfane").
+// Se dopo la rimozione il proprietario non ha più nessun immobile collegato, la scheda viene eliminata.
+app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
+  try {
+    const { nome, paese, via, civico, sub } = req.body;
+    const proprietario = await CapitaleSociale.findOne({ nome });
+    if (!proprietario) return res.status(200).json({ status: 'success', message: 'Proprietario non trovato, nulla da rimuovere.' });
+
+    proprietario.proprieta = proprietario.proprieta.filter(p =>
+      !(p.paese === paese && p.via === via && p.civico === civico && p.sub === sub)
+    );
+
+    if (proprietario.proprieta.length === 0) {
+      await CapitaleSociale.findByIdAndDelete(proprietario._id);
+      return res.status(200).json({ status: 'success', message: 'Immobile rimosso e scheda eliminata (nessun altro immobile collegato).' });
+    }
+
+    await proprietario.save();
+    res.status(200).json({ status: 'success', message: 'Immobile rimosso dal proprietario.', data: proprietario });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
-            
