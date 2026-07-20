@@ -842,6 +842,9 @@ const VistaSchema = new mongoose.Schema({
   filtroColonna: { type: String, default: '' },
   filtroValore: { type: String, default: '' },
   ordineGruppi: { type: [String], default: [] },
+  coloriGruppi: { type: mongoose.Schema.Types.Mixed, default: {} },
+  ordinamentoColonna: { type: String, default: '' },
+  ordinamentoDirezione: { type: String, default: '' },
   ordine: { type: Number, default: 0 }
 }, { timestamps: true });
 const Vista = mongoose.model('Vista', VistaSchema);
