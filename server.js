@@ -161,6 +161,7 @@ const CapitaleSocialeSchema = new mongoose.Schema({
     x: { type: String, default: '' }
   },
   inseritoDa: { type: String, default: '' },
+  residenzaId: { type: String, default: '' }, // _id dell'elemento in 'proprieta' scelto come residenza
   proprieta: [ProprietaCollegataSchema] // Subitems dedicati a contenere tutti i dati della casa
 }, { timestamps: true });
 const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
@@ -451,7 +452,7 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
 // Modifica i dettagli anagrafici di un proprietario già censito (data nascita, telefono, mail, social)
 app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
   try {
-    const campiConsentiti = ['dataNascita', 'tel', 'mail', 'social', 'cf'];
+    const campiConsentiti = ['dataNascita', 'tel', 'mail', 'social', 'cf', 'residenzaId'];
     const aggiornamento = {};
     for (const campo of campiConsentiti) {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
