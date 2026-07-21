@@ -142,6 +142,7 @@ const CentralinoSchema = new mongoose.Schema({
   emailCliente: { type: String, default: '' },
   whatsappInviato: { type: String, default: '' },
   messaggioCliente: { type: String, default: '' },
+  incaricoCollegatoId: { type: String, default: '' },
   riferimentoImmobile: { type: String, default: '' },
   indirizzoImmobile: { type: String, default: '' },
   descrizioneImmobile: { type: String, default: '' },
@@ -447,6 +448,14 @@ app.post('/api/centralino/massivo', async (req, res) => {
   try {
     const inseriti = await Centralino.insertMany(req.body);
     res.status(201).json({ status: 'success', count: inseriti.length });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/centralino/:id', async (req, res) => {
+  try {
+    const aggiornato = await Centralino.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Chiamata non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
