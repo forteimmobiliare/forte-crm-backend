@@ -200,7 +200,8 @@ const IncaricoSchema = new mongoose.Schema({
   linkVideo: { type: String, default: '' },
   linkVirtualTour: { type: String, default: '' },
   linkDocumenti: { type: String, default: '' },
-  foto: { type: String, default: '' }
+  foto: { type: String, default: '' },
+  fotoAllegati: { type: [String], default: [] }
 }, { timestamps: true });
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
 
@@ -275,6 +276,18 @@ app.post('/api/login', async (req, res) => {
 ========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Ricerca un consulente per nome esatto (Nome e Cognome). Pensata per automazioni esterne
+// (es. Make.com) che devono trovare l'ID Telegram/WhatsApp di un consulente dato il suo nome.
+app.get('/api/consulenti/cerca', async (req, res) => {
+  try {
+    const { nome } = req.query;
+    if (!nome) return res.status(200).json({ trovato: false });
+    const trovato = await Consulente.findOne({ nomeCognome: nome.trim() });
+    if (!trovato) return res.status(200).json({ trovato: false });
+    res.status(200).json({ trovato: true, consulente: trovato });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/consulenti', async (req, res) => {
