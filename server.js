@@ -24,6 +24,7 @@ const ConsulenteSchema = new mongoose.Schema({
   mail: { type: String, default: '' },
   idTelegram: { type: String, default: '' },
   idWhatsapp: { type: String, default: '' },
+  fotoProfilo: { type: String, default: '' },
   utente: { type: String, unique: true, required: true, trim: true },
   pass: { type: String, default: '' },
   ruolo: { type: String, default: 'LISTING AGENT' },
@@ -299,6 +300,20 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
       { $set: { areeVisibili: areeVisibili || [], consulentiVisibili: consulentiVisibili || [] } },
       { new: true }
     );
+    if (!aggiornato) return res.status(404).json({ error: 'Consulente non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+// Modifica generica dei dati anagrafici di un consulente (nome, username, password, mail, telefono, telegram, whatsapp, foto, ruolo)
+app.put('/api/consulenti/:id', async (req, res) => {
+  try {
+    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo'];
+    const aggiornamento = {};
+    for (const campo of campiConsentiti) {
+      if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
+    }
+    const aggiornato = await Consulente.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
     if (!aggiornato) return res.status(404).json({ error: 'Consulente non trovato' });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
