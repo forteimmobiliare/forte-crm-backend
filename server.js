@@ -484,18 +484,38 @@ app.get('/api/incarichi', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Ricerca un incarico per ID Elemento (es. "IF-14") o, in mancanza, per corrispondenza parziale
+// nella posizione. Pensata per essere chiamata da automazioni esterne (es. Make.com) per collegare
+// automaticamente una nuova chiamata del Centralino all'incarico giusto.
+app.get('/api/incarichi/cerca', async (req, res) => {
+  try {
+    const { idElemento, posizione } = req.query;
+    let trovato = null;
+    if (idElemento) {
+      trovato = await Incarico.findOne({ idElemento: idElemento.trim() });
+    }
+    if (!trovato && posizione) {
+      trovato = await Incarico.findOne({ posizione: { $regex: posizione.trim(), $options: 'i' } });
+    }
+    if (!trovato) return res.status(200).json({ trovato: false });
+    res.status(200).json({ trovato: true, incarico: trovato });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/incarichi', async (req, res) => {
   try {
     let payload = { ...req.body };
-    // Codice automatico ID-1, ID-2, ... solo se non è stato specificato (l'import Excel porta già i suoi codici IF-XX)
+    // Codice automatico IF-N, che continua la numerazione reale (se l'ultimo importato è IF-119,
+    // il prossimo generato in automatico sarà IF-120). Scatta solo se non è stato specificato un ID
+    // (l'import Excel porta già i suoi codici IF-XX).
     if (!payload.idElemento || !payload.idElemento.toString().trim()) {
-      const esistenti = await Incarico.find({ idElemento: /^ID-\d+$/ });
+      const esistenti = await Incarico.find({ idElemento: /^IF-\d+$/ });
       let maxN = 0;
       esistenti.forEach(e => {
-        const m = e.idElemento.match(/^ID-(\d+)$/);
+        const m = e.idElemento.match(/^IF-(\d+)$/);
         if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
       });
-      payload.idElemento = `ID-${maxN + 1}`;
+      payload.idElemento = `IF-${maxN + 1}`;
     }
     const nuovo = new Incarico(payload);
     res.status(201).json(await nuovo.save());
