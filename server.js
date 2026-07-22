@@ -136,7 +136,7 @@ const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 ========================================== */
 const CentralinoSchema = new mongoose.Schema({
   nome: { type: String, required: true },
-  tipoRichiesta: { type: String, default: '' },
+  tipoRichiesta: { type: String, default: 'Mail Richiesta Specifica' },
   stato: { type: String, default: 'Da Fare' },
   telefonoCliente: { type: String, default: '' },
   emailCliente: { type: String, default: '' },
@@ -152,7 +152,9 @@ const CentralinoSchema = new mongoose.Schema({
   linkImmobile: { type: String, default: '' },
   linkWhatsapp: { type: String, default: '' },
   portale: { type: String, default: '' },
-  dataRichiesta: { type: String, default: '' }
+  dataRichiesta: { type: String, default: '' },
+  mexConsulente: { type: String, default: '' },
+  tgConsInviato: { type: String, default: '' }
 }, { timestamps: true });
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
 
