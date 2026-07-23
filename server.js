@@ -161,6 +161,29 @@ const CentralinoSchema = new mongoose.Schema({
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
 
 /* ==========================================
+   4d. MODELLO BANCA DATI (RICHIESTE CLIENTI ACQUIRENTI)
+   Creato automaticamente quando un item del Centralino diventa "Completo",
+   e gestibile anche manualmente.
+========================================== */
+const BancaDatiSchema = new mongoose.Schema({
+  nomeCognome: { type: String, required: true },
+  mail: { type: String, default: '' },
+  telefono: { type: String, default: '' },
+  immobileFonteRichiesta: { type: String, default: '' }, // idElemento dell'incarico collegato
+  comuniRicerca: { type: [String], default: [] },
+  tipologiaContesto: { type: [String], default: [] },
+  tipologiaUnita: { type: [String], default: [] },
+  budgetAcquisto: { type: String, default: '' },
+  mutuo: { type: String, default: '' },
+  importoMutuo: { type: String, default: '' },
+  deveVendere: { type: String, default: '' },
+  scadenzaAcquistoIdeale: { type: String, default: '' },
+  statoAdvFix: { type: String, default: 'Da Fix' },
+  centralinoOrigineId: { type: String, default: '' } // evita duplicati quando un item torna "Completo"
+}, { timestamps: true });
+const BancaDati = mongoose.model('BancaDati', BancaDatiSchema);
+
+/* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
@@ -502,6 +525,46 @@ app.delete('/api/centralino/:id', async (req, res) => {
     const eliminato = await Centralino.findByIdAndDelete(req.params.id);
     if (!eliminato) return res.status(404).json({ error: 'Chiamata non trovata' });
     res.status(200).json({ status: 'success', message: 'Chiamata eliminata con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: BANCA DATI (RICHIESTE CLIENTI ACQUIRENTI)
+========================================== */
+app.get('/api/banca-dati', async (req, res) => {
+  try {
+    const elenco = await BancaDati.find({}).sort({ createdAt: -1 });
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/banca-dati', async (req, res) => {
+  try {
+    // Se arriva un centralinoOrigineId, evitiamo di creare un doppione per lo stesso item Centralino
+    if (req.body.centralinoOrigineId) {
+      const esistente = await BancaDati.findOne({ centralinoOrigineId: req.body.centralinoOrigineId });
+      if (esistente) return res.status(200).json({ status: 'success', data: esistente, duplicato: true });
+    }
+    const nuovo = new BancaDati(req.body);
+    res.status(201).json({ status: 'success', data: await nuovo.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/banca-dati/:id', async (req, res) => {
+  try {
+    const { campo, valore } = req.body;
+    const aggiornamento = campo ? { [campo]: valore } : req.body;
+    const aggiornato = await BancaDati.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Voce non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/banca-dati/:id', async (req, res) => {
+  try {
+    const eliminato = await BancaDati.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Voce non trovata' });
+    res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
