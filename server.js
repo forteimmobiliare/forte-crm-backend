@@ -3,19 +3,19 @@ const https = require('https');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const app = express();
-
+ 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-
+ 
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
   console.error('ERRORE CRITICO: La variabile MONGO_URI non è configurata su Render!');
 }
-
+ 
 mongoose.connect(mongoURI)
   .then(() => console.log('Database MongoDB Cloud Connesso con Successo!'))
   .catch((err) => console.error('Errore critico di connessione DB:', err));
-
+ 
 /* ==========================================
    1. MODELLI DATABASE CORE (CONSULENTI & TASK)
 ========================================== */
@@ -33,7 +33,7 @@ const ConsulenteSchema = new mongoose.Schema({
   consulentiVisibili: { type: [String], default: [] }
 }, { timestamps: true });
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
-
+ 
 const TodoSchema = new mongoose.Schema({
   data: { type: String, required: true, default: '20/07/2026' },
   task: { type: String, required: true },
@@ -42,7 +42,7 @@ const TodoSchema = new mongoose.Schema({
   note: { type: String, default: '' }
 }, { timestamps: true });
 const Todo = mongoose.model('Todo', TodoSchema);
-
+ 
 /* ==========================================
    2. MODELLO TARGET & BUDGET (OBY)
 ========================================== */
@@ -58,7 +58,7 @@ const ObyBudgetSchema = new mongoose.Schema({
   notizieNecessarie: { type: Number, default: 0 }
 }, { timestamps: true });
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
-
+ 
 /* ==========================================
    3. MODELLO STRADARIO LIVE CLOUD E COPERTURA
 ========================================== */
@@ -114,7 +114,7 @@ const StradarioSchema = new mongoose.Schema({
   ]
 }, { timestamps: true });
 const Stradario = mongoose.model('Stradario', StradarioSchema);
-
+ 
 /* ==========================================
    4. MODELLO CONCORRENZA MANUALE ED EXCEL
 ========================================== */
@@ -132,7 +132,7 @@ const ConcorrenzaSchema = new mongoose.Schema({
   link: { type: String, default: '' }
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
-
+ 
 /* ==========================================
    4b. MODELLO CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
 ========================================== */
@@ -159,7 +159,7 @@ const CentralinoSchema = new mongoose.Schema({
   mexClienteInviato: { type: String, default: '' }
 }, { timestamps: true });
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
-
+ 
 /* ==========================================
    4d. MODELLO BANCA DATI (RICHIESTE CLIENTI ACQUIRENTI)
    Creato automaticamente quando un item del Centralino diventa "Completo",
@@ -182,7 +182,7 @@ const BancaDatiSchema = new mongoose.Schema({
   centralinoOrigineId: { type: String, default: '' } // evita duplicati quando un item torna "Completo"
 }, { timestamps: true });
 const BancaDati = mongoose.model('BancaDati', BancaDatiSchema);
-
+ 
 /* ==========================================
    4e. MODELLO VISIONI (FEEDBACK VISITE IMMOBILE)
    Creato automaticamente quando un item di Banca Dati passa a Stato ADV FIX = "Fissato".
@@ -198,7 +198,7 @@ const VisioniSchema = new mongoose.Schema({
   bancaDatiOrigineId: { type: String, default: '' } // evita duplicati quando l'item torna "Fissato"
 }, { timestamps: true });
 const Visioni = mongoose.model('Visioni', VisioniSchema);
-
+ 
 /* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
@@ -246,7 +246,7 @@ const IncaricoSchema = new mongoose.Schema({
   reportPassword: { type: String, default: '' }
 }, { timestamps: true });
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
-
+ 
 /* ==========================================
    5. MODELLO AGGIORNATO: CAPITALE SOCIALE (CON STRUTTURA IMMOBILE NESTED)
 ========================================== */
@@ -263,7 +263,7 @@ const ProprietaCollegataSchema = new mongoose.Schema({
   mq: String,
   statoImmobile: { type: String, default: 'Residente' } // Residente | Vuoto | Locato | Abitato da Familiare
 });
-
+ 
 const CapitaleSocialeSchema = new mongoose.Schema({
   nome: { type: String, required: true },
   cf: { type: String, default: '' },
@@ -281,7 +281,7 @@ const CapitaleSocialeSchema = new mongoose.Schema({
   proprieta: [ProprietaCollegataSchema] // Subitems dedicati a contenere tutti i dati della casa
 }, { timestamps: true });
 const CapitaleSociale = mongoose.model('CapitaleSociale', CapitaleSocialeSchema);
-
+ 
 /* ==========================================
    6. MODELLO ARCHIVIO UNITÀ RIMOSSE (SOLO SE CAMBIO NOMINATIVO)
 ========================================== */
@@ -293,12 +293,12 @@ const UnitaRimossaSchema = new mongoose.Schema({
   rimossoDa: { type: String, default: '' }
 }, { timestamps: true });
 const UnitaRimossa = mongoose.model('UnitaRimossa', UnitaRimossaSchema);
-
+ 
 /* ==========================================
    ROTTE API INTERNE CORE & AUTENTICAZIONE
 ========================================== */
 app.get('/', (req, res) => res.json({ status: 'success', message: 'Forte CRM Backend attivo e integro al 100%' }));
-
+ 
 app.post('/api/login', async (req, res) => {
   try {
     const { utente, pass } = req.body;
@@ -312,14 +312,14 @@ app.post('/api/login', async (req, res) => {
     res.status(200).json({ status: 'success', data: datiSenzaPassword });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: CONSULENTI
 ========================================== */
 app.get('/api/consulenti', async (req, res) => {
   try { res.status(200).json(await Consulente.find({}).sort({ nomeCognome: 1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 // Ricerca un consulente per nome esatto (Nome e Cognome). Pensata per automazioni esterne
 // (es. Make.com) che devono trovare l'ID Telegram/WhatsApp di un consulente dato il suo nome.
 app.get('/api/consulenti/cerca', async (req, res) => {
@@ -331,14 +331,14 @@ app.get('/api/consulenti/cerca', async (req, res) => {
     res.status(200).json({ trovato: true, consulente: trovato });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/consulenti', async (req, res) => {
   try {
     const nuevo = new Consulente({ ...req.body, utente: req.body.utente.trim() });
     res.status(201).json({ status: 'success', data: await nuevo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/consulenti/:id', async (req, res) => {
   try {
     const eliminato = await Consulente.findByIdAndDelete(req.params.id);
@@ -346,7 +346,7 @@ app.delete('/api/consulenti/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Consulente eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/consulenti/:id/permessi', async (req, res) => {
   try {
     const { areeVisibili, consulentiVisibili } = req.body;
@@ -359,7 +359,7 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 // Modifica generica dei dati anagrafici di un consulente (nome, username, password, mail, telefono, telegram, whatsapp, foto, ruolo)
 app.put('/api/consulenti/:id', async (req, res) => {
   try {
@@ -373,22 +373,22 @@ app.put('/api/consulenti/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: TODO
 ========================================== */
 app.get('/api/todo', async (req, res) => {
   try { res.status(200).json(await Todo.find({}).sort({ createdAt: -1 })); } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/todo', async (req, res) => {
   try { const nuovo = new Todo(req.body); res.status(201).json({ status: 'success', data: await nuovo.save() }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/todo/:id', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await Todo.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/todo/:id', async (req, res) => {
   try {
     const eliminato = await Todo.findByIdAndDelete(req.params.id);
@@ -396,7 +396,7 @@ app.delete('/api/todo/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Task eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.get('/api/oby-budget/:consulente', async (req, res) => {
   try {
     let b = await ObyBudget.findOne({ consulente: req.params.consulente });
@@ -404,11 +404,11 @@ app.get('/api/oby-budget/:consulente', async (req, res) => {
     res.status(200).json(b);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/oby-budget', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await ObyBudget.findOneAndUpdate({ consulente: req.body.consulente }, { $set: req.body }, { new: true, upsert: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: STRADARIO CLOUD COMPLETO
 ========================================== */
@@ -431,18 +431,18 @@ app.get('/api/stradario', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/stradario/:comuneId', async (req, res) => {
   try {
     const updateFields = { vie: req.body.vie };
     if (req.body.abitanti) updateFields.abitanti = req.body.abitanti;
     if (req.body.subalterniTotali) updateFields.subalterniTotali = Number(req.body.subalterniTotali);
-
+ 
     const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: updateFields }, { new: true });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/stradario/nuovo-comune', async (req, res) => {
   try {
     const esiste = await Stradario.findOne({ comune: req.body.comune });
@@ -451,7 +451,7 @@ app.post('/api/stradario/nuovo-comune', async (req, res) => {
     res.status(201).json({ status: 'success', data: await nuovo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/stradario/:comuneId', async (req, res) => {
   try {
     const eliminato = await Stradario.findByIdAndDelete(req.params.comuneId);
@@ -459,7 +459,7 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Comune eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: CONCORRENZA MANUALE ED EXCEL
 ========================================== */
@@ -469,28 +469,28 @@ app.get('/api/concorrenza', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/concorrenza', async (req, res) => {
   try {
     const nuovo = new Concorrenza(req.body);
     res.status(201).json(await nuovo.save());
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/concorrenza/massivo', async (req, res) => {
   try {
     const inseriti = await Concorrenza.insertMany(req.body);
     res.status(201).json({ status: 'success', count: inseriti.length });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/concorrenza/svuota', async (req, res) => {
   try {
     await Concorrenza.deleteMany({});
     res.status(200).json({ status: 'success', message: 'Tabella Concorrenza azzerata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/concorrenza/:id', async (req, res) => {
   try {
     const eliminato = await Concorrenza.findByIdAndDelete(req.params.id);
@@ -498,7 +498,7 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Annuncio eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
 ========================================== */
@@ -508,21 +508,21 @@ app.get('/api/centralino', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/centralino', async (req, res) => {
   try {
     const nuovo = new Centralino(req.body);
     res.status(201).json(await nuovo.save());
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/centralino/massivo', async (req, res) => {
   try {
     const inseriti = await Centralino.insertMany(req.body);
     res.status(201).json({ status: 'success', count: inseriti.length });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/centralino/:id', async (req, res) => {
   try {
     const aggiornato = await Centralino.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
@@ -530,14 +530,14 @@ app.put('/api/centralino/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/centralino/svuota', async (req, res) => {
   try {
     await Centralino.deleteMany({});
     res.status(200).json({ status: 'success', message: 'Registro Chiamate azzerato' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/centralino/:id', async (req, res) => {
   try {
     const eliminato = await Centralino.findByIdAndDelete(req.params.id);
@@ -545,7 +545,7 @@ app.delete('/api/centralino/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Chiamata eliminata con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: BANCA DATI (RICHIESTE CLIENTI ACQUIRENTI)
 ========================================== */
@@ -555,7 +555,7 @@ app.get('/api/banca-dati', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/banca-dati', async (req, res) => {
   try {
     // Se arriva un centralinoOrigineId, evitiamo di creare un doppione per lo stesso item Centralino
@@ -567,7 +567,7 @@ app.post('/api/banca-dati', async (req, res) => {
     res.status(201).json({ status: 'success', data: await nuovo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/banca-dati/:id', async (req, res) => {
   try {
     const { campo, valore } = req.body;
@@ -577,7 +577,7 @@ app.put('/api/banca-dati/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/banca-dati/:id', async (req, res) => {
   try {
     const eliminato = await BancaDati.findByIdAndDelete(req.params.id);
@@ -585,7 +585,7 @@ app.delete('/api/banca-dati/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTA PUBBLICA: REPORT PROPRIETARIO (SOLO DATI AGGREGATI, NESSUN NOME)
    Pensata per essere condivisa con il proprietario di un immobile: mostra solo conteggi
@@ -598,17 +598,17 @@ app.get('/api/report-proprietario/:idElemento', async (req, res) => {
     const idElemento = req.params.idElemento;
     const incarico = await Incarico.findOne({ idElemento });
     if (!incarico) return res.status(404).json({ error: 'Immobile non trovato' });
-
+ 
     if (!incarico.reportUsername || !incarico.reportPassword) {
       return res.status(403).json({ error: 'Report non ancora attivato per questo immobile' });
     }
     if (req.query.username !== incarico.reportUsername || req.query.password !== incarico.reportPassword) {
       return res.status(401).json({ error: 'Username o password errati' });
     }
-
+ 
     const richieste = await BancaDati.find({ immobileFonteRichiesta: idElemento });
     const visioni = await Visioni.find({ incaricoUfficio: idElemento });
-
+ 
     const contaPerCampo = (elenco, campo) => {
       const conteggio = {};
       elenco.forEach(item => {
@@ -617,7 +617,7 @@ app.get('/api/report-proprietario/:idElemento', async (req, res) => {
       });
       return conteggio;
     };
-
+ 
     res.status(200).json({
       indirizzo: incarico.posizione || incarico.nome || '',
       richieste: { totale: richieste.length, perStato: contaPerCampo(richieste, 'statoAdvFix') },
@@ -625,7 +625,7 @@ app.get('/api/report-proprietario/:idElemento', async (req, res) => {
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: VISIONI (FEEDBACK VISITE IMMOBILE)
 ========================================== */
@@ -635,7 +635,7 @@ app.get('/api/visioni', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/visioni', async (req, res) => {
   try {
     if (req.body.bancaDatiOrigineId) {
@@ -646,7 +646,7 @@ app.post('/api/visioni', async (req, res) => {
     res.status(201).json({ status: 'success', data: await nuovo.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/visioni/:id', async (req, res) => {
   try {
     const { campo, valore } = req.body;
@@ -656,7 +656,7 @@ app.put('/api/visioni/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/visioni/:id', async (req, res) => {
   try {
     const eliminato = await Visioni.findByIdAndDelete(req.params.id);
@@ -664,7 +664,7 @@ app.delete('/api/visioni/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
@@ -674,7 +674,7 @@ app.get('/api/incarichi', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 // Geocodifica un indirizzo tramite Google Maps, chiamata dal server (non dal browser) per evitare
 // i blocchi CORS che Google a volte applica alle chiamate dirette dai siti.
 const GOOGLE_MAPS_API_KEY_SERVER = 'AIzaSyBlDMXfhfO2a00Qcgsz6n_red-vDrKI6jQ';
@@ -702,7 +702,7 @@ app.get('/api/geocodifica', async (req, res) => {
     res.status(200).json({ trovato: true, comune, via });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 // Ricerca un incarico per ID Elemento (es. "IF-14") o, in mancanza, per corrispondenza parziale
 // nella posizione. Pensata per essere chiamata da automazioni esterne (es. Make.com) per collegare
 // automaticamente una nuova chiamata del Centralino all'incarico giusto.
@@ -720,7 +720,7 @@ app.get('/api/incarichi/cerca', async (req, res) => {
     res.status(200).json({ trovato: true, incarico: trovato });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/incarichi', async (req, res) => {
   try {
     let payload = { ...req.body };
@@ -740,14 +740,14 @@ app.post('/api/incarichi', async (req, res) => {
     res.status(201).json(await nuovo.save());
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/incarichi/massivo', async (req, res) => {
   try {
     const inseriti = await Incarico.insertMany(req.body);
     res.status(201).json({ status: 'success', count: inseriti.length });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 // Modifica generica di un campo (usata per l'editing inline nella tabella)
 app.put('/api/incarichi/:id', async (req, res) => {
   try {
@@ -757,14 +757,14 @@ app.put('/api/incarichi/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/incarichi/svuota', async (req, res) => {
   try {
     await Incarico.deleteMany({});
     res.status(200).json({ status: 'success', message: 'Incarichi azzerati' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/incarichi/:id', async (req, res) => {
   try {
     const eliminato = await Incarico.findByIdAndDelete(req.params.id);
@@ -772,7 +772,7 @@ app.delete('/api/incarichi/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Incarico eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: CAPITALE SOCIALE CON INTEGRAZIONE INTELLIGENTE (UPSERT LOGIC)
 ========================================== */
@@ -782,15 +782,15 @@ app.get('/api/capitale-sociale', async (req, res) => {
     res.status(200).json(elenco);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/capitale-sociale', async (req, res) => {
   try {
     const { nome, cf, tel, mail, inseritoDa, casaCensita } = req.body;
-
+ 
     // Se la chiamata proviene dall'automazione del citofono, verifichiamo la presenza duplicati
     if (casaCensita) {
       let proprietarioEsistente = await CapitaleSociale.findOne({ nome: nome });
-
+ 
       if (proprietarioEsistente) {
         // Controlliamo se l'immobile è già salvato nella lista delle proprietà di questo utente
         const indiceEsistente = proprietarioEsistente.proprieta.findIndex(p =>
@@ -799,7 +799,7 @@ app.post('/api/capitale-sociale', async (req, res) => {
           p.civico === casaCensita.civico &&
           p.sub === casaCensita.sub
         );
-
+ 
         if (indiceEsistente === -1) {
           // Immobile nuovo per questo proprietario: lo aggiungiamo
           proprietarioEsistente.proprieta.push(casaCensita);
@@ -819,13 +819,13 @@ app.post('/api/capitale-sociale', async (req, res) => {
         return res.status(201).json({ status: 'success', message: 'Nuovo proprietario creato con immobile.', data: nuovoRecord });
       }
     }
-
+ 
     // Inserimento manuale standard da bottone "+ Nuovo Inserimento"
     const nuovoManuale = new CapitaleSociale(req.body);
     res.status(201).json({ status: 'success', data: await nuovoManuale.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 // Rimuove un immobile specifico dalla scheda di un proprietario (usato quando si rinomina
 // un nominativo o si toglie un collegamento citofono-proprietari, per non lasciare schede "orfane").
 // Se la motivazione è "Cambio Nominativo", l'unità rimossa viene archiviata in Unità Rimosse
@@ -836,15 +836,15 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
     const { nome, paese, via, civico, sub, motivazione, rimossoDa } = req.body;
     const proprietario = await CapitaleSociale.findOne({ nome });
     if (!proprietario) return res.status(200).json({ status: 'success', message: 'Proprietario non trovato, nulla da rimuovere.' });
-
+ 
     const immobileRimosso = proprietario.proprieta.find(p =>
       p.paese === paese && p.via === via && p.civico === civico && p.sub === sub
     );
-
+ 
     proprietario.proprieta = proprietario.proprieta.filter(p =>
       !(p.paese === paese && p.via === via && p.civico === civico && p.sub === sub)
     );
-
+ 
     if (motivazione === 'Cambio Nominativo' && immobileRimosso) {
       await UnitaRimossa.create({
         nomePrecedente: nome,
@@ -854,17 +854,17 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
         motivazione, rimossoDa: rimossoDa || ''
       });
     }
-
+ 
     if (proprietario.proprieta.length === 0) {
       await CapitaleSociale.findByIdAndDelete(proprietario._id);
       return res.status(200).json({ status: 'success', message: 'Immobile rimosso e scheda eliminata (nessun altro immobile collegato).' });
     }
-
+ 
     await proprietario.save();
     res.status(200).json({ status: 'success', message: 'Immobile rimosso dal proprietario.', data: proprietario });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 // Modifica i dettagli anagrafici di un proprietario già censito (data nascita, telefono, mail, social)
 app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
   try {
@@ -878,7 +878,7 @@ app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 // Modifica lo Stato Immobile (Residente / Vuoto / Locato / Abitato da Familiare) di una specifica unità
 app.put('/api/capitale-sociale/:id/proprieta/:proprietaId', async (req, res) => {
   try {
@@ -891,7 +891,7 @@ app.put('/api/capitale-sociale/:id/proprieta/:proprietaId', async (req, res) => 
     res.status(200).json({ status: 'success', data: proprietario });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    ROTTE API: ARCHIVIO UNITÀ RIMOSSE
 ========================================== */
@@ -900,7 +900,7 @@ app.get('/api/unita-rimosse', async (req, res) => {
     res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 }));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    7. MOTORE TABELLE PERSONALIZZATE (STILE MONDAY)
    Tipi di colonna: testo | numero | email | telefono | data | select | collegamento | specchio
@@ -916,11 +916,11 @@ const ColonnaPersonalizzataSchema = new mongoose.Schema({
   colonnaCollegamentoId: { type: String, default: '' },
   colonnaDaMostrareId: { type: String, default: '' }
 });
-
+ 
 const RigaPersonalizzataSchema = new mongoose.Schema({
   valori: { type: mongoose.Schema.Types.Mixed, default: {} } // { colonnaId: valore (stringa, o array per 'collegamento') }
 }, { timestamps: true });
-
+ 
 const TabellaPersonalizzataSchema = new mongoose.Schema({
   nome: { type: String, required: true },
   icona: { type: String, default: 'fa-table' },
@@ -929,7 +929,7 @@ const TabellaPersonalizzataSchema = new mongoose.Schema({
   righe: [RigaPersonalizzataSchema]
 }, { timestamps: true });
 const TabellaPersonalizzata = mongoose.model('TabellaPersonalizzata', TabellaPersonalizzataSchema);
-
+ 
 /* ==========================================
    ROTTE API: TABELLE PERSONALIZZATE
 ========================================== */
@@ -937,7 +937,7 @@ app.get('/api/tabelle', async (req, res) => {
   try { res.status(200).json(await TabellaPersonalizzata.find({}).sort({ nome: 1 })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.get('/api/tabelle/:id', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
@@ -945,7 +945,7 @@ app.get('/api/tabelle/:id', async (req, res) => {
     res.status(200).json(t);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/tabelle', async (req, res) => {
   try {
     const nuova = new TabellaPersonalizzata({
@@ -956,7 +956,7 @@ app.post('/api/tabelle', async (req, res) => {
     res.status(201).json({ status: 'success', data: await nuova.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/tabelle/:id', async (req, res) => {
   try {
     const eliminata = await TabellaPersonalizzata.findByIdAndDelete(req.params.id);
@@ -964,7 +964,7 @@ app.delete('/api/tabelle/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Tabella eliminata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 // Sposta una scheda (tabella) in un'altra cartella dell'albero laterale ('' = fuori da ogni cartella)
 app.put('/api/tabelle/:id/cartella', async (req, res) => {
   try {
@@ -973,7 +973,7 @@ app.put('/api/tabelle/:id/cartella', async (req, res) => {
     res.status(200).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/tabelle/:id/colonne', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
@@ -983,7 +983,7 @@ app.post('/api/tabelle/:id/colonne', async (req, res) => {
     res.status(201).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
@@ -993,7 +993,7 @@ app.delete('/api/tabelle/:id/colonne/:colonnaId', async (req, res) => {
     res.status(200).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/tabelle/:id/righe', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
@@ -1003,7 +1003,7 @@ app.post('/api/tabelle/:id/righe', async (req, res) => {
     res.status(201).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
@@ -1018,7 +1018,7 @@ app.put('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
     res.status(200).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
   try {
     const t = await TabellaPersonalizzata.findById(req.params.id);
@@ -1028,7 +1028,7 @@ app.delete('/api/tabelle/:id/righe/:rigaId', async (req, res) => {
     res.status(200).json({ status: 'success', data: t });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    8. MOTORE CARTELLE (AREE) - ALBERO NEL MENU LATERALE
    Organizzano le Schede (tabelle personalizzate): annidabili, riordinabili
@@ -1039,12 +1039,12 @@ const AreaCartellaSchema = new mongoose.Schema({
   ordine: { type: Number, default: 0 }
 }, { timestamps: true });
 const AreaCartella = mongoose.model('AreaCartella', AreaCartellaSchema);
-
+ 
 app.get('/api/aree-cartella', async (req, res) => {
   try { res.status(200).json(await AreaCartella.find({}).sort({ ordine: 1 })); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/aree-cartella', async (req, res) => {
   try {
     const parentId = req.body.parentId || '';
@@ -1053,7 +1053,7 @@ app.post('/api/aree-cartella', async (req, res) => {
     res.status(201).json({ status: 'success', data: await nuova.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/aree-cartella/:id', async (req, res) => {
   try {
     const campiConsentiti = ['nome', 'parentId', 'ordine'];
@@ -1066,7 +1066,7 @@ app.put('/api/aree-cartella/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornata });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 // Elimina un'area: le sotto-aree diventano di livello principale, le schede al suo interno restano
 // come schede ma senza cartella (non vengono cancellate, si ritrovano fuori da ogni cartella)
 app.delete('/api/aree-cartella/:id', async (req, res) => {
@@ -1078,7 +1078,7 @@ app.delete('/api/aree-cartella/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Area eliminata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    9. MOTORE VISTE (RAGGRUPPAMENTO, FILTRI, COLONNE VISIBILI PER SCHEDA)
 ========================================== */
@@ -1096,14 +1096,14 @@ const VistaSchema = new mongoose.Schema({
   ordine: { type: Number, default: 0 }
 }, { timestamps: true });
 const Vista = mongoose.model('Vista', VistaSchema);
-
+ 
 app.get('/api/viste', async (req, res) => {
   try {
     const filtro = req.query.tabellaTipo ? { tabellaTipo: req.query.tabellaTipo } : {};
     res.status(200).json(await Vista.find(filtro).sort({ ordine: 1 }));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.post('/api/viste', async (req, res) => {
   try {
     const conteggio = await Vista.countDocuments({ tabellaTipo: req.body.tabellaTipo });
@@ -1111,7 +1111,7 @@ app.post('/api/viste', async (req, res) => {
     res.status(201).json({ status: 'success', data: await nuova.save() });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/viste/:id', async (req, res) => {
   try {
     const aggiornata = await Vista.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
@@ -1119,7 +1119,7 @@ app.put('/api/viste/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornata });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 app.delete('/api/viste/:id', async (req, res) => {
   try {
     const eliminata = await Vista.findByIdAndDelete(req.params.id);
@@ -1127,7 +1127,7 @@ app.delete('/api/viste/:id', async (req, res) => {
     res.status(200).json({ status: 'success', message: 'Vista eliminata' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 /* ==========================================
    10. IMPOSTAZIONI COLONNE (VISIBILITÀ PER RUOLO CONSULENTE)
 ========================================== */
@@ -1136,7 +1136,7 @@ const ImpostazioneColonneSchema = new mongoose.Schema({
   colonneNascosteConsulenti: { type: [String], default: [] }
 }, { timestamps: true });
 const ImpostazioneColonne = mongoose.model('ImpostazioneColonne', ImpostazioneColonneSchema);
-
+ 
 app.get('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
   try {
     let doc = await ImpostazioneColonne.findOne({ tabellaTipo: req.params.tabellaTipo });
@@ -1144,7 +1144,7 @@ app.get('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
     res.status(200).json(doc);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
-
+ 
 app.put('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
   try {
     const aggiornato = await ImpostazioneColonne.findOneAndUpdate(
@@ -1155,6 +1155,7 @@ app.put('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
-
+ 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
+ 
