@@ -184,6 +184,22 @@ const BancaDatiSchema = new mongoose.Schema({
 const BancaDati = mongoose.model('BancaDati', BancaDatiSchema);
 
 /* ==========================================
+   4e. MODELLO VISIONI (FEEDBACK VISITE IMMOBILE)
+   Creato automaticamente quando un item di Banca Dati passa a Stato ADV FIX = "Fissato".
+========================================== */
+const VisioniSchema = new mongoose.Schema({
+  nomeCognome: { type: String, required: true },
+  telefono: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  incaricoUfficio: { type: String, default: '' }, // idElemento dell'incarico collegato
+  feedbackAdv: { type: String, default: '' }, // Interessa | Valuta | Non Interessa
+  testoFeedback: { type: String, default: '' },
+  valorePercepito: { type: String, default: '' },
+  bancaDatiOrigineId: { type: String, default: '' } // evita duplicati quando l'item torna "Fissato"
+}, { timestamps: true });
+const Visioni = mongoose.model('Visioni', VisioniSchema);
+
+/* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
@@ -563,6 +579,45 @@ app.put('/api/banca-dati/:id', async (req, res) => {
 app.delete('/api/banca-dati/:id', async (req, res) => {
   try {
     const eliminato = await BancaDati.findByIdAndDelete(req.params.id);
+    if (!eliminato) return res.status(404).json({ error: 'Voce non trovata' });
+    res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: VISIONI (FEEDBACK VISITE IMMOBILE)
+========================================== */
+app.get('/api/visioni', async (req, res) => {
+  try {
+    const elenco = await Visioni.find({}).sort({ createdAt: -1 });
+    res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/visioni', async (req, res) => {
+  try {
+    if (req.body.bancaDatiOrigineId) {
+      const esistente = await Visioni.findOne({ bancaDatiOrigineId: req.body.bancaDatiOrigineId });
+      if (esistente) return res.status(200).json({ status: 'success', data: esistente, duplicato: true });
+    }
+    const nuovo = new Visioni(req.body);
+    res.status(201).json({ status: 'success', data: await nuovo.save() });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/visioni/:id', async (req, res) => {
+  try {
+    const { campo, valore } = req.body;
+    const aggiornamento = campo ? { [campo]: valore } : req.body;
+    const aggiornato = await Visioni.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Voce non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/visioni/:id', async (req, res) => {
+  try {
+    const eliminato = await Visioni.findByIdAndDelete(req.params.id);
     if (!eliminato) return res.status(404).json({ error: 'Voce non trovata' });
     res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
