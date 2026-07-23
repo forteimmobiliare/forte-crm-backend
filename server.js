@@ -241,7 +241,9 @@ const IncaricoSchema = new mongoose.Schema({
   linkVirtualTour: { type: String, default: '' },
   linkDocumenti: { type: String, default: '' },
   foto: { type: String, default: '' },
-  fotoAllegati: { type: [String], default: [] }
+  fotoAllegati: { type: [String], default: [] },
+  reportUsername: { type: String, default: '' },
+  reportPassword: { type: String, default: '' }
 }, { timestamps: true });
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
 
@@ -581,6 +583,46 @@ app.delete('/api/banca-dati/:id', async (req, res) => {
     const eliminato = await BancaDati.findByIdAndDelete(req.params.id);
     if (!eliminato) return res.status(404).json({ error: 'Voce non trovata' });
     res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTA PUBBLICA: REPORT PROPRIETARIO (SOLO DATI AGGREGATI, NESSUN NOME)
+   Pensata per essere condivisa con il proprietario di un immobile: mostra solo conteggi
+   (Richieste per Stato ADV FIX, Visioni per Feedback ADV), mai nomi o contatti dei clienti.
+   Protetta da una password semplice condivisa (cambiala qui sotto quando vuoi).
+========================================== */
+const PASSWORD_REPORT_PROPRIETARIO = 'Forte2026'; // non più usata per il controllo, lasciata solo come riferimento storico
+app.get('/api/report-proprietario/:idElemento', async (req, res) => {
+  try {
+    const idElemento = req.params.idElemento;
+    const incarico = await Incarico.findOne({ idElemento });
+    if (!incarico) return res.status(404).json({ error: 'Immobile non trovato' });
+
+    if (!incarico.reportUsername || !incarico.reportPassword) {
+      return res.status(403).json({ error: 'Report non ancora attivato per questo immobile' });
+    }
+    if (req.query.username !== incarico.reportUsername || req.query.password !== incarico.reportPassword) {
+      return res.status(401).json({ error: 'Username o password errati' });
+    }
+
+    const richieste = await BancaDati.find({ immobileFonteRichiesta: idElemento });
+    const visioni = await Visioni.find({ incaricoUfficio: idElemento });
+
+    const contaPerCampo = (elenco, campo) => {
+      const conteggio = {};
+      elenco.forEach(item => {
+        const valore = item[campo] || 'Non specificato';
+        conteggio[valore] = (conteggio[valore] || 0) + 1;
+      });
+      return conteggio;
+    };
+
+    res.status(200).json({
+      indirizzo: incarico.posizione || incarico.nome || '',
+      richieste: { totale: richieste.length, perStato: contaPerCampo(richieste, 'statoAdvFix') },
+      visioni: { totale: visioni.length, perFeedback: contaPerCampo(visioni, 'feedbackAdv') }
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
