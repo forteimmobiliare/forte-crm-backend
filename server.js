@@ -1,4 +1,5 @@
 const express = require('express');
+const https = require('https');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const app = express();
@@ -511,6 +512,34 @@ app.get('/api/incarichi', async (req, res) => {
   try {
     const elenco = await Incarico.find({}).sort({ createdAt: -1 });
     res.status(200).json(elenco);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Geocodifica un indirizzo tramite Google Maps, chiamata dal server (non dal browser) per evitare
+// i blocchi CORS che Google a volte applica alle chiamate dirette dai siti.
+const GOOGLE_MAPS_API_KEY_SERVER = 'AIzaSyBlDMXfhfO2a00Qcgsz6n_red-vDrKI6jQ';
+app.get('/api/geocodifica', async (req, res) => {
+  try {
+    const { indirizzo } = req.query;
+    if (!indirizzo) return res.status(200).json({ trovato: false });
+    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(indirizzo)}&key=${GOOGLE_MAPS_API_KEY_SERVER}`;
+    const rispostaGoogle = await new Promise((risolvi, rifiuta) => {
+      https.get(url, (r) => {
+        let dati = '';
+        r.on('data', (pezzo) => dati += pezzo);
+        r.on('end', () => risolvi(dati));
+      }).on('error', rifiuta);
+    });
+    const dati = JSON.parse(rispostaGoogle);
+    if (dati.status !== 'OK' || !dati.results || dati.results.length === 0) return res.status(200).json({ trovato: false });
+    const componenti = dati.results[0].address_components;
+    const trovaComponente = (tipo) => {
+      const c = componenti.find(x => x.types.includes(tipo));
+      return c ? c.long_name : '';
+    };
+    const comune = trovaComponente('locality') || trovaComponente('administrative_area_level_3') || '';
+    const via = [trovaComponente('route'), trovaComponente('street_number')].filter(x => x).join(' ');
+    res.status(200).json({ trovato: true, comune, via });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
