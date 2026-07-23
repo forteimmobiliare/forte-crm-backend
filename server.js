@@ -11,6 +11,12 @@ const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
   console.error('ERRORE CRITICO: La variabile MONGO_URI non è configurata su Render!');
 }
+if (!process.env.GEMINI_API_KEY) {
+  console.error('ATTENZIONE: La variabile GEMINI_API_KEY non è configurata su Render — l\'Assistente CRM non funzionerà.');
+}
+if (!process.env.GOOGLE_MAPS_API_KEY_SERVER) {
+  console.error('ATTENZIONE: La variabile GOOGLE_MAPS_API_KEY_SERVER non è configurata su Render — la geocodifica indirizzi non funzionerà.');
+}
 
 mongoose.connect(mongoURI)
   .then(() => console.log('Database MongoDB Cloud Connesso con Successo!'))
@@ -587,6 +593,124 @@ app.delete('/api/banca-dati/:id', async (req, res) => {
 });
 
 /* ==========================================
+   ROTTA: ASSISTENTE CRM (CHAT INTERNA COLLEGATA A GOOGLE GEMINI)
+   Risponde alle domande dei consulenti su come funziona il CRM, usando come
+   conoscenza di base una guida scritta a mano di tutte le funzionalità.
+========================================== */
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const GEMINI_MODEL = 'gemini-2.5-flash';
+
+const GUIDA_CRM_FORTE = `
+Sei l'assistente interno del CRM di Forte Immobiliare. Rispondi in italiano, in modo chiaro, breve e pratico,
+spiegando SEMPRE dove cliccare passo passo. Se non sai una risposta con certezza, dillo onestamente invece di inventare.
+
+STRUTTURA GENERALE: il CRM è diviso in schede nel menu laterale, raggruppate per area (Capitale Sociale, Centralino,
+Incarichi Gestione, Consulenti, Acquisizione, ecc). Ogni scheda è una tabella modificabile direttamente cliccando sulle celle.
+
+--- INCARICHI (menu Incarichi Gestione ➔ Incarichi) ---
+Contiene tutti gli immobili in gestione. Colonne principali: Nome, ID (es. IF-120), Stato, Posizione, Contesto,
+Tipologia, Locali, Mq, Prezzo, Contratto (Vendita/Affitto), Team Leader/Listing/Buyer (tendine collegate ai Consulenti).
+- Icona graffetta 📎 accanto al nome: apre il popup Allegati, con foto (anche da Google Drive), video, virtual tour,
+  documenti, descrizione testuale, i due pulsanti per generare la Brochure PDF (Stampabile e Web), e la sezione
+  "Report Proprietario" dove si imposta username/password da dare al proprietario per vedere le statistiche del suo immobile.
+- Icona persone 👥 accanto al nome: apre/chiude un sottopannello con le Richieste (da Banca Dati) e le Visioni collegate
+  a quell'immobile.
+- Le viste si possono raggruppare, filtrare, ordinare tramite i controlli sopra la tabella.
+
+--- CENTRALINO (Registro Chiamate) ---
+Registra ogni richiesta arrivata (telefono, mail, portali). Ha una colonna "Smistamento Completo" calcolata
+automaticamente da "Tg Cons Inviato" e "Mex Cliente Inviato": Da Fare, Solo Consulente, Solo Cliente, Completo.
+La tabella è raggruppata di default in queste 4 sezioni apri/chiudi. Quando un item diventa "Completo",
+si crea IN AUTOMATICO una voce in Banca Dati Richieste (senza bisogno di fare nulla).
+
+--- BANCA DATI RICHIESTE (menu sotto Centralino) ---
+Elenco dei potenziali acquirenti/richieste. Colonne: Nome & Cognome, Mail, Telefono, Immobile Fonte Richiesta
+(collegato agli Incarichi), Comuni Ricerca (popup con tutti i comuni di Milano/Varese/Como/Monza-Brianza/Novara),
+Tipologia Contesto e Tipologia Unità (popup a selezione multipla), Budget Acquisto, Mutuo (Sì/No), Importo Mutuo,
+% Ltv (calcolato automaticamente da Importo Mutuo / Budget), Deve Vendere, Scadenza Acquisto Ideale,
+e Stato ADV FIX (Da Fix, In Attesa, Fissato, Non Interessa, Venduto/Non Disponibile).
+Quando si imposta Stato ADV FIX = "Fissato", si crea IN AUTOMATICO una voce nella scheda Visioni.
+C'è anche un pulsante "Trasporta Completo in Banca Dati" nel Centralino, per recuperare i vecchi item "Completo"
+creati prima di questa funzione.
+
+--- VISIONI (Feedback ADV) (menu sotto Centralino) ---
+Elenco delle visite effettuate. Colonne: Nome & Cognome, Telefono, Mail, Incarico Ufficio, Feedback ADV
+(Interessa/Valuta/Non Interessa), Testo Feedback, Valore Percepito, e un pulsante "Copia link" che genera un
+link unico da mandare al cliente (via WhatsApp/mail) per fargli compilare da solo il proprio feedback dopo la visita,
+senza bisogno di accedere al CRM.
+
+--- CONSULENTI ---
+Anagrafica di tutti i consulenti: nome, username/password di accesso, mail, telefono, ID Telegram/WhatsApp,
+foto profilo (caricabile anche dal computer), ruolo, permessi di visibilità su aree e altri consulenti.
+
+--- CAPITALE SOCIALE ---
+Anagrafica Proprietari: tutte le persone censite con le case collegate. Unità Rimosse: archivio storico di
+unità che hanno cambiato nominativo.
+
+--- ESPLORATORE TERRITORIO (Stradario) ---
+Censimento strutturato per Comune ➔ Via ➔ Civico ➔ Citofono, con proprietario collegato e stato (Residente,
+Vuoto, Locato, Abitato da Familiare).
+
+--- ALTRE SCHEDE ---
+Concorrenza (annunci di altre agenzie), To Do List (task dei consulenti), Oby (calcolo budget/target individuale
+in base a provvigione desiderata).
+
+--- BROCHURE PDF ---
+Dall'incarico (popup Allegati): "Genera Brochure Stampabile" crea 4 pagine A4 verticali in ordine di stampa a
+libretto (foglio1: pag4+pag1, foglio2: pag2+pag3); "Genera Brochure Web" crea le stesse 4 pagine in ordine
+normale di lettura. In entrambi i casi si apre la finestra di stampa del browser: bisogna scegliere
+"Salva come PDF" come destinazione.
+
+--- PAGINE PUBBLICHE (fuori dal CRM, per clienti esterni) ---
+"Report Proprietario": pagina dove un proprietario, con username/password dedicati (impostati nel popup Allegati
+del suo incarico), vede solo conteggi aggregati (mai nomi) di richieste e visioni sul suo immobile.
+"Feedback Visita": pagina dove un cliente, tramite link unico generato da una riga di Visioni, compila da solo
+il proprio giudizio sulla visita appena fatta.
+`.trim();
+
+app.post('/api/assistente-crm', async (req, res) => {
+  try {
+    const { messaggio, storico } = req.body;
+    if (!messaggio) return res.status(400).json({ error: 'Messaggio mancante' });
+
+    const contenutiChat = [
+      ...(Array.isArray(storico) ? storico : []).map(m => ({ role: m.ruolo === 'assistente' ? 'model' : 'user', parts: [{ text: m.testo }] })),
+      { role: 'user', parts: [{ text: messaggio }] }
+    ];
+
+    const corpoRichiesta = JSON.stringify({
+      contents: contenutiChat,
+      systemInstruction: { parts: [{ text: GUIDA_CRM_FORTE }] }
+    });
+
+    const rispostaGemini = await new Promise((risolvi, rifiuta) => {
+      const opzioni = {
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpoRichiesta) }
+      };
+      const richiesta = https.request(opzioni, (r) => {
+        let dati = '';
+        r.on('data', (pezzo) => dati += pezzo);
+        r.on('end', () => risolvi(dati));
+      });
+      richiesta.on('error', rifiuta);
+      richiesta.write(corpoRichiesta);
+      richiesta.end();
+    });
+
+    const dati = JSON.parse(rispostaGemini);
+    const testoRisposta = dati?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    if (!testoRisposta) {
+      console.error('Risposta Gemini inattesa:', JSON.stringify(dati));
+      return res.status(500).json({ error: 'Risposta non valida da Gemini', dettaglio: dati });
+    }
+    res.status(200).json({ risposta: testoRisposta });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
    ROTTA PUBBLICA: REPORT PROPRIETARIO (SOLO DATI AGGREGATI, NESSUN NOME)
    Pensata per essere condivisa con il proprietario di un immobile: mostra solo conteggi
    (Richieste per Stato ADV FIX, Visioni per Feedback ADV), mai nomi o contatti dei clienti.
@@ -677,7 +801,7 @@ app.get('/api/incarichi', async (req, res) => {
 
 // Geocodifica un indirizzo tramite Google Maps, chiamata dal server (non dal browser) per evitare
 // i blocchi CORS che Google a volte applica alle chiamate dirette dai siti.
-const GOOGLE_MAPS_API_KEY_SERVER = 'AIzaSyBlDMXfhfO2a00Qcgsz6n_red-vDrKI6jQ';
+const GOOGLE_MAPS_API_KEY_SERVER = process.env.GOOGLE_MAPS_API_KEY_SERVER;
 app.get('/api/geocodifica', async (req, res) => {
   try {
     const { indirizzo } = req.query;
