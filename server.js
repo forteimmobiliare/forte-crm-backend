@@ -668,6 +668,58 @@ del suo incarico), vede solo conteggi aggregati (mai nomi) di richieste e vision
 il proprio giudizio sulla visita appena fatta.
 `.trim();
 
+app.post('/api/analizza-citofono', async (req, res) => {
+  try {
+    const { immagineBase64, tipoMime, messaggio } = req.body;
+    if (!immagineBase64) return res.status(400).json({ error: 'Immagine mancante' });
+
+    const promptEstrazione = `Guarda questa foto di una targa/bussola citofonica di un condominio. Estrai TUTTI i nomi
+scritti su ciascun pulsante/etichetta, uno per uno, esattamente come sono scritti (anche se poco chiari, fai la tua
+migliore lettura). L'utente ha scritto questo messaggio insieme alla foto, che potrebbe contenere l'indirizzo
+(comune, via, civico) a cui questi nomi vanno associati: "${messaggio || ''}".
+
+Rispondi SOLO con un oggetto JSON valido, senza testo aggiuntivo, in questo formato esatto:
+{"comune": "nome comune o stringa vuota se non capito", "via": "nome via o stringa vuota se non capito", "civico": "numero civico o stringa vuota se non capito", "nomi": ["nome1", "nome2", "..."]}`;
+
+    const corpoRichiesta = JSON.stringify({
+      contents: [{
+        role: 'user',
+        parts: [
+          { text: promptEstrazione },
+          { inline_data: { mime_type: tipoMime || 'image/jpeg', data: immagineBase64 } }
+        ]
+      }],
+      generationConfig: { responseMimeType: 'application/json' }
+    });
+
+    const rispostaGemini = await new Promise((risolvi, rifiuta) => {
+      const opzioni = {
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpoRichiesta) }
+      };
+      const richiesta = https.request(opzioni, (r) => {
+        let dati = '';
+        r.on('data', (pezzo) => dati += pezzo);
+        r.on('end', () => risolvi(dati));
+      });
+      richiesta.on('error', rifiuta);
+      richiesta.write(corpoRichiesta);
+      richiesta.end();
+    });
+
+    const dati = JSON.parse(rispostaGemini);
+    const testoRisposta = dati?.candidates?.[0]?.content?.parts?.[0]?.text || null;
+    if (!testoRisposta) {
+      console.error('Risposta Gemini inattesa (citofono):', JSON.stringify(dati));
+      return res.status(500).json({ error: 'Risposta non valida da Gemini', dettaglio: dati });
+    }
+    const estrazione = JSON.parse(testoRisposta);
+    res.status(200).json(estrazione);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/assistente-crm', async (req, res) => {
   try {
     const { messaggio, storico } = req.body;
