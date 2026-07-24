@@ -127,6 +127,7 @@ const Stradario = mongoose.model('Stradario', StradarioSchema);
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
   comune: { type: String, default: '' }, // per filtrare la Concorrenza per comune/zona
+  via: { type: String, default: '' }, // collegata (con suggerimenti) allo Stradario
   paeseVia: { type: String, required: true },
   civico: { type: String, default: 'N.D.' },
   contesto: { type: String, default: 'Residenziale' },
@@ -1380,6 +1381,7 @@ const VistaSchema = new mongoose.Schema({
   colonneNascoste: { type: [String], default: [] },
   filtroColonna: { type: String, default: '' },
   filtroValore: { type: String, default: '' },
+  filtriAvanzati: { type: [mongoose.Schema.Types.Mixed], default: [] }, // [{ connettore, colonna, condizione, valore }]
   ordineGruppi: { type: [String], default: [] },
   coloriGruppi: { type: mongoose.Schema.Types.Mixed, default: {} },
   ordinamentoColonna: { type: String, default: '' },
