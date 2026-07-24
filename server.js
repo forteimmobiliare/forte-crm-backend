@@ -136,7 +136,7 @@ const ConcorrenzaSchema = new mongoose.Schema({
   agenzia: { type: String, default: 'Concorrente' },
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
-  statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Venduto o Ritirato' (impostato dallo scraping automatico)
+  statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Venduto o Ritirato' (modificabile a mano dalla tabella)
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
@@ -514,140 +514,6 @@ app.put('/api/concorrenza/:id', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
-/* ==========================================
-   SCRAPING SETTIMANALE CONCORRENZA (immobiliare.it)
-   ATTENZIONE: immobiliare.it vieta lo scraping automatico nelle sue Condizioni Generali,
-   ed è possibile che il sito cambi struttura senza preavviso, rompendo questa estrazione.
-   Pensato per uso interno, non per ripubblicare i dati. Se i risultati escono vuoti o
-   sbagliati dopo un cambiamento del sito, questa parte va rivista.
-========================================== */
-const COMUNI_SCRAPING_SLUG = {
-  'Legnano': 'legnano',
-  'Samarate': 'samarate',
-  'Busto Arsizio': 'busto-arsizio',
-  'Gallarate': 'gallarate',
-  'Castellanza': 'castellanza',
-  'Olgiate Olona': 'olgiate-olona',
-  'Canegrate': 'canegrate',
-  'San Giorgio su Legnano': 'san-giorgio-su-legnano',
-  'Cerro Maggiore': 'cerro-maggiore',
-  'San Vittore Olona': 'san-vittore-olona',
-  'Rescaldina': 'rescaldina',
-  'Uboldo': 'uboldo',
-  'Origgio': 'origgio',
-  'Saronno': 'saronno',
-  'Mozzate': 'mozzate',
-  'Limido Comasco': 'limido-comasco'
-};
-
-function fetchHtmlPagina(url) {
-  return new Promise((risolvi, rifiuta) => {
-    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' } }, (r) => {
-      let dati = '';
-      r.on('data', (pezzo) => dati += pezzo);
-      r.on('end', () => risolvi(dati));
-    }).on('error', rifiuta);
-  });
-}
-
-// Estrae gli annunci da una pagina HTML grezza di immobiliare.it. Formato basato sui link
-// "/annunci/ID/" con il titolo come testo del link; prezzo e agenzia cercati nel testo
-// immediatamente precedente. Se immobiliare.it cambia la struttura della pagina, questa
-// funzione va aggiornata guardando l'HTML reale con cui risponde in quel momento.
-function estraiAnnunciDaHtml(html) {
-  const annunci = [];
-  const regexLink = /href="(https:\/\/www\.immobiliare\.it\/annunci\/(\d+)\/[^"]*)"[^>]*>([^<]{5,150})</g;
-  let match;
-  const idVisti = new Set();
-  while ((match = regexLink.exec(html)) !== null) {
-    const link = match[1];
-    const id = match[2];
-    const titoloGrezzo = match[3].trim();
-    if (idVisti.has(id) || !titoloGrezzo) continue;
-    idVisti.add(id);
-
-    const contestoAttorno = html.substring(Math.max(0, match.index - 800), match.index);
-    const matchPrezzi = [...contestoAttorno.matchAll(/€\s?([\d.,]+)/g)];
-    const prezzo = matchPrezzi.length ? matchPrezzi[matchPrezzi.length - 1][1] : '';
-    const matchAgenzia = [...contestoAttorno.matchAll(/alt="([^"]{3,60})"/g)];
-    const agenzia = matchAgenzia.length ? matchAgenzia[matchAgenzia.length - 1][1].replace(/&amp;/g, '&') : 'Concorrente';
-
-    annunci.push({
-      titolo: titoloGrezzo.replace(/&#x27;/g, "'").replace(/&amp;/g, '&'),
-      paeseVia: titoloGrezzo.replace(/&#x27;/g, "'").replace(/&amp;/g, '&'),
-      prezzo: prezzo || '0',
-      agenzia,
-      link,
-      dataAnnuncio: new Date().toLocaleDateString('it-IT'),
-      statoAnnuncio: 'Attivo'
-    });
-  }
-  return annunci;
-}
-
-async function eseguiScrapingConcorrenza() {
-  console.log('--- Inizio scraping settimanale Concorrenza ---');
-  let totaleNuovi = 0, totaleAggiornati = 0, totaleVenduti = 0;
-
-  for (const [comune, slug] of Object.entries(COMUNI_SCRAPING_SLUG)) {
-    const linkTrovatiComune = [];
-    let pagina = 1;
-    let continuaScansione = true;
-
-    while (continuaScansione && pagina <= 20) {
-      const url = pagina === 1 ? `https://www.immobiliare.it/vendita-case/${slug}/` : `https://www.immobiliare.it/vendita-case/${slug}/?pag=${pagina}`;
-      try {
-        const html = await fetchHtmlPagina(url);
-        const annunci = estraiAnnunciDaHtml(html);
-        if (annunci.length === 0) { continuaScansione = false; break; }
-
-        for (const annuncio of annunci) {
-          linkTrovatiComune.push(annuncio.link);
-          const esistente = await Concorrenza.findOne({ link: annuncio.link });
-          if (esistente) {
-            await Concorrenza.findByIdAndUpdate(esistente._id, { $set: { prezzo: annuncio.prezzo, statoAnnuncio: 'Attivo' } });
-            totaleAggiornati++;
-          } else {
-            await Concorrenza.create({ ...annuncio, paeseVia: `${annuncio.paeseVia}, ${comune}` });
-            totaleNuovi++;
-          }
-        }
-        pagina++;
-        await new Promise(r => setTimeout(r, 1500)); // pausa tra le pagine, per non martellare il sito
-      } catch (e) {
-        console.error(`Errore scraping ${comune} pagina ${pagina}:`, e.message);
-        continuaScansione = false;
-      }
-    }
-
-    const risultatoVenduti = await Concorrenza.updateMany(
-      { paeseVia: { $regex: comune, $options: 'i' }, link: { $nin: linkTrovatiComune }, statoAnnuncio: 'Attivo' },
-      { $set: { statoAnnuncio: 'Venduto o Ritirato' } }
-    );
-    totaleVenduti += risultatoVenduti.modifiedCount || 0;
-    console.log(`${comune}: ${linkTrovatiComune.length} annunci trovati su ${pagina - 1} pagine.`);
-  }
-
-  console.log(`--- Scraping completato. Nuovi: ${totaleNuovi}, Aggiornati: ${totaleAggiornati}, Segnati come venduti/ritirati: ${totaleVenduti} ---`);
-  return { nuovi: totaleNuovi, aggiornati: totaleAggiornati, venduti: totaleVenduti };
-}
-
-// Avvia lo scraping manualmente (utile per testare subito, senza aspettare il giro settimanale).
-// Risponde subito e lo fa girare in background, perché può richiedere diversi minuti.
-app.post('/api/concorrenza/scraping-ora', async (req, res) => {
-  res.status(200).json({ status: 'success', message: 'Scraping avviato in background: controlla la tabella Concorrenza tra qualche minuto e guarda i log di Render per il dettaglio.' });
-  eseguiScrapingConcorrenza().catch(e => console.error('Errore scraping manuale:', e));
-});
-
-// Programmazione automatica: un primo giro un minuto dopo l'avvio del server, poi ogni 7 giorni.
-// (Nota: se Render riavvia il servizio, il conteggio dei 7 giorni riparte da capo)
-const SETTE_GIORNI_MS = 7 * 24 * 60 * 60 * 1000;
-setTimeout(() => {
-  eseguiScrapingConcorrenza().catch(e => console.error('Errore scraping automatico:', e));
-  setInterval(() => {
-    eseguiScrapingConcorrenza().catch(e => console.error('Errore scraping automatico:', e));
-  }, SETTE_GIORNI_MS);
-}, 60000);
 
 /* ==========================================
    ROTTE API: CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
