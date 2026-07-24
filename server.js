@@ -136,7 +136,7 @@ const ConcorrenzaSchema = new mongoose.Schema({
   agenzia: { type: String, default: 'Concorrente' },
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
-  statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Venduto o Ritirato' (modificabile a mano dalla tabella)
+  statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
@@ -486,8 +486,28 @@ app.post('/api/concorrenza', async (req, res) => {
 
 app.post('/api/concorrenza/massivo', async (req, res) => {
   try {
-    const inseriti = await Concorrenza.insertMany(req.body);
-    res.status(201).json({ status: 'success', count: inseriti.length });
+    const righeRicevute = req.body;
+    const linkGiaPresenti = new Set(
+      (await Concorrenza.find({}, 'link')).map(r => (r.link || '').trim().toLowerCase()).filter(l => l)
+    );
+
+    const daInserire = [];
+    let saltatiPerDoppione = 0;
+    const linkVistiInQuestoImport = new Set();
+
+    righeRicevute.forEach(riga => {
+      const linkNormalizzato = (riga.link || '').trim().toLowerCase();
+      const eGiaPresente = linkNormalizzato && (linkGiaPresenti.has(linkNormalizzato) || linkVistiInQuestoImport.has(linkNormalizzato));
+      if (eGiaPresente) {
+        saltatiPerDoppione++;
+      } else {
+        if (linkNormalizzato) linkVistiInQuestoImport.add(linkNormalizzato);
+        daInserire.push(riga);
+      }
+    });
+
+    const inseriti = daInserire.length > 0 ? await Concorrenza.insertMany(daInserire) : [];
+    res.status(201).json({ status: 'success', count: inseriti.length, saltatiPerDoppione });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
