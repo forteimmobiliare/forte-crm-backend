@@ -598,7 +598,7 @@ app.delete('/api/banca-dati/:id', async (req, res) => {
    conoscenza di base una guida scritta a mano di tutte le funzionalità.
 ========================================== */
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = 'gemini-2.5-flash';
+const GEMINI_MODEL = 'gemini-3.6-flash';
 
 const GUIDA_CRM_FORTE = `
 Sei l'assistente interno del CRM di Forte Immobiliare. Rispondi in italiano, in modo chiaro, breve e pratico,
