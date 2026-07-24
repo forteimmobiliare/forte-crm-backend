@@ -134,11 +134,76 @@ const ConcorrenzaSchema = new mongoose.Schema({
   bagni: { type: String, default: '1' },
   prezzo: { type: String, required: true },
   agenzia: { type: String, default: 'Concorrente' },
+  agenziaId: { type: String, default: '' },
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
   statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
+
+/* ==========================================
+   SCHEMI: AGENZIE E AGENTI IMMOBILIARI (Capitale Sociale)
+   Un'agenzia ha molti agenti collegati tramite agenziaId.
+========================================== */
+const AgenziaImmobiliareSchema = new mongoose.Schema({
+  nomeAgenzia: { type: String, required: true },
+  sede: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  telefono: { type: String, default: '' }
+}, { timestamps: true });
+const AgenziaImmobiliare = mongoose.model('AgenziaImmobiliare', AgenziaImmobiliareSchema);
+
+const AgenteImmobiliareSchema = new mongoose.Schema({
+  nomeCognome: { type: String, required: true },
+  telefono: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  agenziaId: { type: String, default: '' }
+}, { timestamps: true });
+const AgenteImmobiliare = mongoose.model('AgenteImmobiliare', AgenteImmobiliareSchema);
+
+app.get('/api/agenzie-immobiliari', async (req, res) => {
+  try { res.status(200).json(await AgenziaImmobiliare.find({}).sort({ nomeAgenzia: 1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/agenzie-immobiliari', async (req, res) => {
+  try { res.status(201).json(await new AgenziaImmobiliare(req.body).save()); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/agenzie-immobiliari/:id', async (req, res) => {
+  try {
+    const aggiornato = await AgenziaImmobiliare.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Agenzia non trovata' });
+    res.status(200).json(aggiornato);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.delete('/api/agenzie-immobiliari/:id', async (req, res) => {
+  try {
+    await AgenziaImmobiliare.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/api/agenti-immobiliari', async (req, res) => {
+  try { res.status(200).json(await AgenteImmobiliare.find({}).sort({ nomeCognome: 1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/agenti-immobiliari', async (req, res) => {
+  try { res.status(201).json(await new AgenteImmobiliare(req.body).save()); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/agenti-immobiliari/:id', async (req, res) => {
+  try {
+    const aggiornato = await AgenteImmobiliare.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Agente non trovato' });
+    res.status(200).json(aggiornato);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.delete('/api/agenti-immobiliari/:id', async (req, res) => {
+  try {
+    await AgenteImmobiliare.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 /* ==========================================
    4b. MODELLO CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
@@ -487,6 +552,22 @@ app.post('/api/concorrenza', async (req, res) => {
 app.post('/api/concorrenza/massivo', async (req, res) => {
   try {
     const righeRicevute = req.body;
+
+    // Per ogni nome di agenzia presente nel file, cerca l'Agenzia Immobiliare già censita (per nome,
+    // senza distinguere maiuscole/minuscole); se non esiste ancora, la crea al volo.
+    const agenzieEsistenti = await AgenziaImmobiliare.find({});
+    const mappaNomeAgenziaId = new Map(agenzieEsistenti.map(a => [a.nomeAgenzia.trim().toLowerCase(), a._id.toString()]));
+
+    const nomiAgenziaNelFile = [...new Set(
+      righeRicevute.map(r => (r.agenzia || '').trim()).filter(nome => nome && nome.toLowerCase() !== 'n.d.' && nome.toLowerCase() !== 'concorrente')
+    )];
+    for (const nomeAgenzia of nomiAgenziaNelFile) {
+      if (!mappaNomeAgenziaId.has(nomeAgenzia.toLowerCase())) {
+        const nuovaAgenzia = await new AgenziaImmobiliare({ nomeAgenzia }).save();
+        mappaNomeAgenziaId.set(nomeAgenzia.toLowerCase(), nuovaAgenzia._id.toString());
+      }
+    }
+
     const linkGiaPresenti = new Set(
       (await Concorrenza.find({}, 'link')).map(r => (r.link || '').trim().toLowerCase()).filter(l => l)
     );
@@ -502,12 +583,14 @@ app.post('/api/concorrenza/massivo', async (req, res) => {
         saltatiPerDoppione++;
       } else {
         if (linkNormalizzato) linkVistiInQuestoImport.add(linkNormalizzato);
+        const nomeAgenziaRiga = (riga.agenzia || '').trim().toLowerCase();
+        riga.agenziaId = mappaNomeAgenziaId.get(nomeAgenziaRiga) || '';
         daInserire.push(riga);
       }
     });
 
     const inseriti = daInserire.length > 0 ? await Concorrenza.insertMany(daInserire) : [];
-    res.status(201).json({ status: 'success', count: inseriti.length, saltatiPerDoppione });
+    res.status(201).json({ status: 'success', count: inseriti.length, saltatiPerDoppione, agenzieNuoveCreate: nomiAgenziaNelFile.filter(n => !agenzieEsistenti.some(a => a.nomeAgenzia.trim().toLowerCase() === n.toLowerCase())).length });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
