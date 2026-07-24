@@ -506,6 +506,14 @@ app.delete('/api/concorrenza/:id', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.put('/api/concorrenza/:id', async (req, res) => {
+  try {
+    const aggiornato = await Concorrenza.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Annuncio non trovato' });
+    res.status(200).json(aggiornato);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 /* ==========================================
    SCRAPING SETTIMANALE CONCORRENZA (immobiliare.it)
    ATTENZIONE: immobiliare.it vieta lo scraping automatico nelle sue Condizioni Generali,
