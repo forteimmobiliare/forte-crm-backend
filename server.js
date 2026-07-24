@@ -126,6 +126,7 @@ const Stradario = mongoose.model('Stradario', StradarioSchema);
 ========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
   titolo: { type: String, required: true },
+  comune: { type: String, default: '' }, // per filtrare la Concorrenza per comune/zona
   paeseVia: { type: String, required: true },
   civico: { type: String, default: 'N.D.' },
   contesto: { type: String, default: 'Residenziale' },
@@ -135,6 +136,7 @@ const ConcorrenzaSchema = new mongoose.Schema({
   prezzo: { type: String, required: true },
   agenzia: { type: String, default: 'Concorrente' },
   agenziaId: { type: String, default: '' },
+  privato: { type: String, default: '' }, // '' (agenzia) | 'VDP' | 'VDP NO NUMERO'
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
   statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
