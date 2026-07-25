@@ -332,6 +332,32 @@ const TransazioneSchema = new mongoose.Schema({
 const Transazione = mongoose.model('Transazione', TransazioneSchema);
 
 /* ==========================================
+   4g. MODELLO PROFESSIONISTI (Capitale Sociale)
+   Rubrica della rete: BNI, professionisti, clienti rogitati.
+========================================== */
+const ProfessionistaSchema = new mongoose.Schema({
+  nome: { type: String, required: true },
+  gruppo: { type: String, default: '' },              // BNI, Acquirenti Rogitati, ...
+  ultimoContatto: { type: String, default: '' },
+  tipologia: { type: String, default: '' },           // Notaio, Commercialista, ...
+  noteLastContact: { type: String, default: '' },
+  dataLast1to1: { type: String, default: '' },
+  residenza: { type: String, default: '' },
+  attivitaLavorativa: { type: String, default: '' },
+  dataCompleanno: { type: String, default: '' },
+  compleannoRogito: { type: String, default: '' },
+  gac: { type: String, default: '' },                 // Gac in euro
+  storniDati: { type: String, default: '' },          // Storni dati in euro
+  referenzeRicevute: { type: String, default: '' },
+  giriCompletati: { type: String, default: '' },
+  incaricoCollegato: { type: String, default: '' },   // idElemento dell'incarico
+  telefono: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  inseritoDa: { type: String, default: '' }
+}, { timestamps: true });
+const Professionista = mongoose.model('Professionista', ProfessionistaSchema);
+
+/* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
@@ -1066,6 +1092,37 @@ app.put('/api/proposte/:id', async (req, res) => {
 /* ==========================================
    ROTTE API: TRANSAZIONI (create dalle Proposte accettate)
 ========================================== */
+/* ==========================================
+   ROTTE API: PROFESSIONISTI (Capitale Sociale)
+========================================== */
+app.get('/api/professionisti', async (req, res) => {
+  try { res.status(200).json(await Professionista.find({}).sort({ createdAt: -1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/professionisti', async (req, res) => {
+  try { res.status(201).json({ status: 'success', data: await new Professionista(req.body).save() }); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/professionisti/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined)
+      ? { [req.body.campo]: req.body.valore }
+      : req.body;
+    const aggiornato = await Professionista.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Professionista non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/professionisti/:id', async (req, res) => {
+  try {
+    await Professionista.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 app.get('/api/transazioni', async (req, res) => {
   try { res.status(200).json(await Transazione.find({}).sort({ createdAt: -1 })); }
   catch (err) { res.status(500).json({ error: err.message }); }
