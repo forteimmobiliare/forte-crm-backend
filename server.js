@@ -1066,8 +1066,10 @@ app.post('/api/incarichi/massivo', async (req, res) => {
 // Modifica generica di un campo (usata per l'editing inline nella tabella)
 app.put('/api/incarichi/:id', async (req, res) => {
   try {
-    const { campo, valore } = req.body;
-    const aggiornato = await Incarico.findByIdAndUpdate(req.params.id, { $set: { [campo]: valore } }, { new: true });
+    // Due formati possibili: quello vecchio { campo, valore } (usato dalla modifica di singole celle
+    // in tabella), oppure un oggetto con più campi insieme (usato dal popup Gestione Documenti).
+    const datiDaAggiornare = (req.body.campo !== undefined) ? { [req.body.campo]: req.body.valore } : req.body;
+    const aggiornato = await Incarico.findByIdAndUpdate(req.params.id, { $set: datiDaAggiornare }, { new: true });
     if (!aggiornato) return res.status(404).json({ error: 'Incarico non trovato' });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
