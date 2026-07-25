@@ -911,10 +911,32 @@ app.get('/api/report-proprietario/:idElemento', async (req, res) => {
       return conteggio;
     };
 
+    const gd = incarico.gestioneDocumenti || {};
+    const venditori = gd.venditori || [];
+
     res.status(200).json({
       indirizzo: incarico.posizione || incarico.nome || '',
       richieste: { totale: richieste.length, perStato: contaPerCampo(richieste, 'statoAdvFix') },
-      visioni: { totale: visioni.length, perFeedback: contaPerCampo(visioni, 'feedbackAdv') }
+      visioni: { totale: visioni.length, perFeedback: contaPerCampo(visioni, 'feedbackAdv') },
+      gestioneProcesso: {
+        dataInizio: incarico.dataIncarico || '',
+        dataFine: incarico.dataScadenza || '',
+        dataPrimoOH: incarico.nextOpenHouse || gd.dataPrimoOH || '',
+        fotoFatte: gd.fotoFatte === 'si',
+        dataPubblicazionePrevista: gd.dataPubblicazione || '',
+        pubblicato: {
+          immobiliareIt: !!gd.linkImmobiliareIt,
+          idealista: !!gd.linkIdealista,
+          wikicasa: !!gd.linkWikicasa,
+          immobiliareForte: !!gd.linkImmobiliareForte
+        },
+        documentiVenditori: { totale: venditori.length, completi: venditori.filter(v => v.cartaIdentita && v.codiceFiscale).length },
+        documentiImmobile: {
+          provenienzaFatta: !!gd.allegatoProvenienza,
+          mutuoGestito: gd.mutuoPresente !== 'si' || !!gd.allegatoAttoMutuo,
+          accessoAttiGestito: gd.accessoAttiFatto !== 'si' || !!gd.allegatoUrbanistica
+        }
+      }
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
