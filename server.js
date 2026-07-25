@@ -284,12 +284,18 @@ const PropostaSchema = new mongoose.Schema({
   dataPresaProposta: { type: String, default: '' },
   dataScadenza: { type: String, default: '' },
   vincolo: { type: String, default: 'no' }, // 'si' | 'no'
+  vincoloSpecifica: { type: String, default: '' },
+  vincoloDataFine: { type: String, default: '' },
   prezzoIncarico: { type: String, default: '' },
   prezzoProposta: { type: String, default: '' },
   percentualeSconto: { type: Number, default: 0 },
   percentualeChiusura: { type: Number, default: 100 },
   provvigioneAcquirente: { type: String, default: '' },
-  percentualeProvvigione: { type: Number, default: 0 }
+  percentualeProvvigione: { type: Number, default: 0 },
+  acquirenti: { type: [{ nome: String, codiceFiscale: String, allegatoDocumento: String }], default: [] },
+  dataRogito: { type: String, default: '' },
+  dataConsegnaImmobile: { type: String, default: '' },
+  noteVarie: { type: String, default: '' }
 }, { timestamps: true });
 const Proposta = mongoose.model('Proposta', PropostaSchema);
 
