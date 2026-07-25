@@ -270,9 +270,28 @@ const VisioniSchema = new mongoose.Schema({
   feedbackAdv: { type: String, default: '' }, // Interessa | Valuta | Non Interessa
   testoFeedback: { type: String, default: '' },
   valorePercepito: { type: String, default: '' },
-  bancaDatiOrigineId: { type: String, default: '' } // evita duplicati quando l'item torna "Fissato"
+  bancaDatiOrigineId: { type: String, default: '' }, // evita duplicati quando l'item torna "Fissato"
+  propostaCreata: { type: Boolean, default: false }
 }, { timestamps: true });
 const Visioni = mongoose.model('Visioni', VisioniSchema);
+
+const PropostaSchema = new mongoose.Schema({
+  nomeCognome: { type: String, default: '' },
+  telefono: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  incaricoUfficio: { type: String, default: '' }, // idElemento dell'incarico collegato
+  visioneOrigineId: { type: String, default: '' }, // la Visione da cui è stata creata
+  dataPresaProposta: { type: String, default: '' },
+  dataScadenza: { type: String, default: '' },
+  vincolo: { type: String, default: 'no' }, // 'si' | 'no'
+  prezzoIncarico: { type: String, default: '' },
+  prezzoProposta: { type: String, default: '' },
+  percentualeSconto: { type: Number, default: 0 },
+  percentualeChiusura: { type: Number, default: 100 },
+  provvigioneAcquirente: { type: String, default: '' },
+  percentualeProvvigione: { type: Number, default: 0 }
+}, { timestamps: true });
+const Proposta = mongoose.model('Proposta', PropostaSchema);
 
 /* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
@@ -977,6 +996,39 @@ app.delete('/api/visioni/:id', async (req, res) => {
     const eliminato = await Visioni.findByIdAndDelete(req.params.id);
     if (!eliminato) return res.status(404).json({ error: 'Voce non trovata' });
     res.status(200).json({ status: 'success', message: 'Voce eliminata con successo' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE API: PROPOSTE (create dalla scheda Visioni)
+========================================== */
+app.get('/api/proposte', async (req, res) => {
+  try { res.status(200).json(await Proposta.find({}).sort({ createdAt: -1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+app.post('/api/proposte', async (req, res) => {
+  try {
+    // Evita doppioni: se esiste già una proposta per quella Visione, la aggiorna invece di crearne un'altra
+    const esistente = req.body.visioneOrigineId ? await Proposta.findOne({ visioneOrigineId: req.body.visioneOrigineId }) : null;
+    if (esistente) {
+      const aggiornata = await Proposta.findByIdAndUpdate(esistente._id, { $set: req.body }, { new: true });
+      return res.status(200).json({ status: 'success', data: aggiornata });
+    }
+    const nuova = await new Proposta(req.body).save();
+    res.status(201).json({ status: 'success', data: nuova });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.put('/api/proposte/:id', async (req, res) => {
+  try {
+    const aggiornata = await Proposta.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!aggiornata) return res.status(404).json({ error: 'Proposta non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornata });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+app.delete('/api/proposte/:id', async (req, res) => {
+  try {
+    await Proposta.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
