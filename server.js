@@ -306,6 +306,32 @@ const PropostaSchema = new mongoose.Schema({
 const Proposta = mongoose.model('Proposta', PropostaSchema);
 
 /* ==========================================
+   4f. MODELLO TRANSAZIONI
+   Creato in automatico quando una Proposta passa a stato "Accettata".
+========================================== */
+const TransazioneSchema = new mongoose.Schema({
+  propostaOrigineId: { type: String, default: '' },   // evita doppioni sulla stessa proposta
+  incaricoUfficio: { type: String, default: '' },
+  statoTransazione: { type: String, default: 'Da Fare Preliminare' }, // Vincolata | Da Fare Preliminare | Fare Preliminare | Da Rogitare | Rogitate
+  vincolo: { type: String, default: 'no' },
+  vincoloSpecifica: { type: String, default: '' },
+  dataScadenzaVincolo: { type: String, default: '' },
+  acquirenti: { type: [{ nome: String, codiceFiscale: String }], default: [] },
+  venditori: { type: [{ nome: String, codiceFiscale: String }], default: [] },
+  immobile: { type: String, default: '' },
+  prezzoVendita: { type: String, default: '' },
+  dataPrimoAcconto: { type: String, default: '' },
+  dataRogito: { type: String, default: '' },          // tempistiche rogito
+  preliminareFatto: { type: String, default: 'No' },  // Si | No
+  dataPreliminare: { type: String, default: '' },
+  nomeNotaio: { type: String, default: '' },
+  provvigioneAcquirente: { type: String, default: '' },
+  provvigioneVenditore: { type: String, default: '' },
+  note: { type: String, default: '' }
+}, { timestamps: true });
+const Transazione = mongoose.model('Transazione', TransazioneSchema);
+
+/* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
@@ -1037,6 +1063,47 @@ app.put('/api/proposte/:id', async (req, res) => {
     res.status(200).json({ status: 'success', data: aggiornata });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
+/* ==========================================
+   ROTTE API: TRANSAZIONI (create dalle Proposte accettate)
+========================================== */
+app.get('/api/transazioni', async (req, res) => {
+  try { res.status(200).json(await Transazione.find({}).sort({ createdAt: -1 })); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/transazioni', async (req, res) => {
+  try {
+    // Una sola transazione per proposta: se esiste gia' la aggiorna invece di duplicarla
+    const esistente = req.body.propostaOrigineId
+      ? await Transazione.findOne({ propostaOrigineId: req.body.propostaOrigineId })
+      : null;
+    if (esistente) {
+      const aggiornata = await Transazione.findByIdAndUpdate(esistente._id, { $set: req.body }, { new: true });
+      return res.status(200).json({ status: 'success', message: 'Transazione gia presente, aggiornata.', data: aggiornata });
+    }
+    const nuova = await new Transazione(req.body).save();
+    res.status(201).json({ status: 'success', data: nuova });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/transazioni/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined)
+      ? { [req.body.campo]: req.body.valore }   // aggiornamento di una singola cella
+      : req.body;
+    const aggiornata = await Transazione.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+    if (!aggiornata) return res.status(404).json({ error: 'Transazione non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornata });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/transazioni/:id', async (req, res) => {
+  try {
+    await Transazione.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 app.delete('/api/proposte/:id', async (req, res) => {
   try {
     await Proposta.findByIdAndDelete(req.params.id);
