@@ -292,6 +292,11 @@ const PropostaSchema = new mongoose.Schema({
   percentualeChiusura: { type: Number, default: 100 },
   provvigioneAcquirente: { type: String, default: '' },
   percentualeProvvigione: { type: Number, default: 0 },
+  caparra: { type: String, default: '' },                  // assegno alla sottoscrizione
+  accontoPreliminare: { type: String, default: '' },       // bonifico al preliminare
+  dataPreliminare: { type: String, default: '' },
+  composizioneImmobile: { type: String, default: '' },     // es. "APPARTAMENTO + CANTINA"
+  statoImmobileProposta: { type: String, default: '' },    // occupato | libero al rogito | locato
   acquirenti: { type: [{ nome: String, codiceFiscale: String, allegatoDocumento: String }], default: [] },
   dataRogito: { type: String, default: '' },
   dataConsegnaImmobile: { type: String, default: '' },
