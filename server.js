@@ -318,7 +318,8 @@ const IncaricoSchema = new mongoose.Schema({
   foto: { type: String, default: '' },
   fotoAllegati: { type: [String], default: [] },
   reportUsername: { type: String, default: '' },
-  reportPassword: { type: String, default: '' }
+  reportPassword: { type: String, default: '' },
+  gestioneDocumenti: { type: mongoose.Schema.Types.Mixed, default: {} } // venditori, provenienza, mutuo, accesso atti, foto, pubblicazione
 }, { timestamps: true });
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
 
