@@ -358,6 +358,116 @@ const ProfessionistaSchema = new mongoose.Schema({
 const Professionista = mongoose.model('Professionista', ProfessionistaSchema);
 
 /* ==========================================
+   4h. MODELLO OPPORTUNITY (Acquisizione > Notizie)
+========================================== */
+const OpportunitySchema = new mongoose.Schema({
+  nome: { type: String, default: '' },
+  persone: { type: String, default: '' },              // consulente assegnato
+  posizione: { type: String, default: '' },
+  telefono: { type: String, default: '' },
+  cdvFatto: { type: String, default: 'No' },
+  dataPotCdv: { type: String, default: '' },
+  comune: { type: String, default: '' },
+  via: { type: String, default: '' },
+  civico: { type: String, default: '' },
+  tipologiaContesto: { type: String, default: '' },
+  noteContesto: { type: String, default: '' },
+  locali: { type: String, default: '' },
+  mq: { type: String, default: '' },
+  piano: { type: String, default: '' },
+  piuLivelli: { type: String, default: 'No' },
+  bagni: { type: String, default: '' },
+  pertinenze: { type: String, default: '' },
+  giaVendita: { type: String, default: 'No' },
+  richiesta: { type: String, default: '' },
+  linkAnnuncio: { type: String, default: '' },
+  semaforoConcorrenza: { type: String, default: 'Da Scoprire' },
+  dataScadenzaIncarico: { type: String, default: '' },
+  dataProssimaAttivita: { type: String, default: '' },
+  dataUltimaAttivita: { type: String, default: '' },
+  esitoUltimaAttivita: { type: String, default: 'Da Editare' },
+  giriAttivita: { type: String, default: '' },
+  fonte: { type: String, default: '' },
+  fonteBancaDati: { type: String, default: '' },
+  inseritoDa: { type: String, default: '' }
+}, { timestamps: true });
+const Opportunity = mongoose.model('Opportunity', OpportunitySchema);
+
+/* ==========================================
+   4i. MODELLO CDV (Comparativa di Vendita)
+========================================== */
+const CdvSchema = new mongoose.Schema({
+  nome: { type: String, default: '' },
+  livello: { type: String, default: 'Info' },          // Info | Opportunity
+  posizione: { type: String, default: '' },
+  tipologiaAnnuncio: { type: String, default: '' },
+  fonte: { type: String, default: '' },
+  comune: { type: String, default: '' },
+  via: { type: String, default: '' },
+  civico: { type: String, default: '' },
+  contesto: { type: String, default: '' },
+  unita: { type: String, default: '' },
+  accessori: { type: String, default: '' },
+  venditaAffitto: { type: String, default: '' },
+  anagraficaProprietario: { type: String, default: '' }, // nome in Capitale Sociale
+  cdv1: { type: String, default: 'No' },
+  dataCdv1: { type: String, default: '' },
+  cdv2: { type: String, default: 'No' },
+  dataCdv2: { type: String, default: '' },
+  valutazione: { type: String, default: '' },
+  allegatoCdv: { type: String, default: '' },
+  incaricoFatto: { type: String, default: 'No' },
+  cdvFatto: { type: String, default: 'No' },
+  dataPotIncarico: { type: String, default: '' },
+  dataPotCdv: { type: String, default: '' },
+  statoProprietario: { type: String, default: 'Da Editare' },
+  dataProssimaAttivita: { type: String, default: '' },
+  statoZona: { type: String, default: '' },
+  statoVdp: { type: String, default: '' },
+  attivitaVdp: { type: String, default: '' },
+  attivitaConcorrenza: { type: String, default: '' },
+  statoNecrologio: { type: String, default: '' },
+  attivitaNecrologio: { type: String, default: '' },
+  dataUltimaAttivita: { type: String, default: '' },
+  esitoUltimaAttivita: { type: String, default: 'Da Editare' },
+  piano: { type: String, default: '' },
+  giaVendita: { type: String, default: 'No' },
+  piuLivelli: { type: String, default: 'No' },
+  richiesta: { type: String, default: '' },
+  zonaImmobiliare: { type: String, default: '' },
+  bagni: { type: String, default: '' },
+  locali: { type: String, default: '' },
+  mq: { type: String, default: '' },
+  giriAttivita: { type: String, default: '' },
+  linkAnnuncio: { type: String, default: '' },
+  visuraggio: { type: String, default: 'No' },
+  nomeProprieta: { type: String, default: '' },
+  testoUltimoFeedback: { type: String, default: '' },
+  dataNascita: { type: String, default: '' },
+  dataMorte: { type: String, default: '' },
+  semaforoConcorrenza: { type: String, default: 'Da Scoprire' },
+  dataScadenzaIncarico: { type: String, default: '' },
+  nomeIntestatariCf: { type: String, default: '' },
+  noteCdv1: { type: String, default: '' },
+  piuSpazio: { type: String, default: 'No' },
+  noteCdv2: { type: String, default: '' },
+  speseCondominiali: { type: String, default: '' },
+  costoAcquisto: { type: String, default: '' },
+  ristrutturazione: { type: String, default: '' },
+  euroRistrutturazione: { type: String, default: '' },
+  budgetRiacquisto: { type: String, default: '' },
+  mutuoRiacquisto: { type: String, default: '' },
+  mutuoResiduo: { type: String, default: '' },
+  noteSpeseCondominiali: { type: String, default: '' },
+  noteRistrutturazione: { type: String, default: '' },
+  riacquisto: { type: String, default: '' },
+  dataAcquisto: { type: String, default: '' },
+  documentiRaccolti: { type: String, default: '' },   // Plan + Visure + Atto + Spese Condominiali
+  inseritoDa: { type: String, default: '' }
+}, { timestamps: true });
+const Cdv = mongoose.model('Cdv', CdvSchema);
+
+/* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
@@ -1095,6 +1205,42 @@ app.put('/api/proposte/:id', async (req, res) => {
 /* ==========================================
    ROTTE API: PROFESSIONISTI (Capitale Sociale)
 ========================================== */
+/* ==========================================
+   ROTTE API: OPPORTUNITY e CDV
+========================================== */
+function registraRotteScheda(percorso, Modello, nomeUmano) {
+  app.get(`/api/${percorso}`, async (req, res) => {
+    try { res.status(200).json(await Modello.find({}).sort({ createdAt: -1 })); }
+    catch (err) { res.status(500).json({ error: err.message }); }
+  });
+
+  app.post(`/api/${percorso}`, async (req, res) => {
+    try { res.status(201).json({ status: 'success', data: await new Modello(req.body).save() }); }
+    catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.put(`/api/${percorso}/:id`, async (req, res) => {
+    try {
+      const payload = (req.body && req.body.campo !== undefined)
+        ? { [req.body.campo]: req.body.valore }
+        : req.body;
+      const aggiornato = await Modello.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+      if (!aggiornato) return res.status(404).json({ error: `${nomeUmano} non trovato` });
+      res.status(200).json({ status: 'success', data: aggiornato });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+
+  app.delete(`/api/${percorso}/:id`, async (req, res) => {
+    try {
+      await Modello.findByIdAndDelete(req.params.id);
+      res.status(200).json({ status: 'success' });
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
+}
+
+registraRotteScheda('opportunity', Opportunity, 'Opportunity');
+registraRotteScheda('cdv', Cdv, 'Cdv');
+
 app.get('/api/professionisti', async (req, res) => {
   try { res.status(200).json(await Professionista.find({}).sort({ createdAt: -1 })); }
   catch (err) { res.status(500).json({ error: err.message }); }
