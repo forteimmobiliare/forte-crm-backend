@@ -168,6 +168,7 @@ const ConcorrenzaSchema = new mongoose.Schema({
   agenzia: { type: String, default: 'Concorrente' },
   agenziaId: { type: String, default: '' },
   privato: { type: String, default: '' }, // '' (agenzia) | 'VDP' | 'VDP NO NUMERO'
+  statoSviluppo: { type: String, default: 'Informazione' }, // Informazione | Individuato proprietario | Opportunity
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
   statoAnnuncio: { type: String, default: 'Attivo' }, // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
