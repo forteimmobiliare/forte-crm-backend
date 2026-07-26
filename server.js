@@ -19,8 +19,32 @@ if (!process.env.GOOGLE_MAPS_API_KEY_SERVER) {
 }
 
 mongoose.connect(mongoURI)
-  .then(() => console.log('Database MongoDB Cloud Connesso con Successo!'))
+  .then(() => {
+    console.log('Database MongoDB Cloud Connesso con Successo!');
+    impostaBrokerPredefinito();
+  })
   .catch((err) => console.error('Errore critico di connessione DB:', err));
+
+/* Al primo avvio dopo l'introduzione dei ruoli, Alessandro Forte diventa il Broker
+   dell'agenzia: e' l'unico ruolo che puo' governare le autorizzazioni degli altri.
+   Se un Broker esiste gia' non tocca niente. */
+async function impostaBrokerPredefinito() {
+  try {
+    const brokerEsistente = await Consulente.findOne({ ruolo: 'Broker' });
+    if (brokerEsistente) return;
+    const forte = await Consulente.findOne({ nomeCognome: /alessandro\s*forte/i });
+    if (!forte) {
+      console.log('Nessun Broker impostato: scheda di Alessandro Forte non trovata.');
+      return;
+    }
+    forte.ruolo = 'Broker';
+    if (!forte.percentualeProvvigione) forte.percentualeProvvigione = '100';
+    await forte.save();
+    console.log(`Ruolo Broker assegnato a ${forte.nomeCognome} (${forte.utente}).`);
+  } catch (err) {
+    console.error('Impossibile impostare il Broker predefinito:', err.message);
+  }
+}
 
 /* ==========================================
    1. MODELLI DATABASE CORE (CONSULENTI & TASK)
@@ -34,7 +58,8 @@ const ConsulenteSchema = new mongoose.Schema({
   fotoProfilo: { type: String, default: '' },
   utente: { type: String, unique: true, required: true, trim: true },
   pass: { type: String, default: '' },
-  ruolo: { type: String, default: 'LISTING AGENT' },
+  ruolo: { type: String, default: 'Junior Assistant' },
+  percentualeProvvigione: { type: String, default: '' },  // se vuoto vale quella del ruolo
   areeVisibili: { type: [String], default: [] },
   consulentiVisibili: { type: [String], default: [] }
 }, { timestamps: true });
