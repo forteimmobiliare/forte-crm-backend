@@ -329,7 +329,8 @@ const PropostaSchema = new mongoose.Schema({
   dataPreliminare: { type: String, default: '' },
   composizioneImmobile: { type: String, default: '' },     // es. "APPARTAMENTO + CANTINA"
   statoImmobileProposta: { type: String, default: '' },    // occupato | libero al rogito | locato
-  statoProposta: { type: String, default: 'In Corso' },     // In Corso | Accettata | Rifiutata | Scaduta
+  statoProposta: { type: String, default: 'In Corso' },     // In Corso | Accettata (Vincolata) | Accettata (No Vincolo) | Rifiutata | Scaduta
+  esitoVincolo: { type: String, default: '' },              // svincolata | buon-fine | decaduta
   acquirenti: { type: [{ nome: String, codiceFiscale: String, allegatoDocumento: String }], default: [] },
   dataRogito: { type: String, default: '' },
   dataConsegnaImmobile: { type: String, default: '' },
