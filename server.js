@@ -1558,6 +1558,25 @@ app.put('/api/capitale-sociale/:id/proprieta/:proprietaId', async (req, res) => 
 /* ==========================================
    ROTTE API: ARCHIVIO UNITÀ RIMOSSE
 ========================================== */
+/* Aggiornamento generico di una scheda dell'anagrafica (usato per assegnare il consulente) */
+app.put('/api/capitale-sociale/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined) ? { [req.body.campo]: req.body.valore } : req.body;
+    const aggiornato = await CapitaleSociale.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Proprietario non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/unita-rimosse/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined) ? { [req.body.campo]: req.body.valore } : req.body;
+    const aggiornato = await UnitaRimossa.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Unit\u00e0 non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 app.get('/api/unita-rimosse', async (req, res) => {
   try {
     res.status(200).json(await UnitaRimossa.find({}).sort({ createdAt: -1 }));
