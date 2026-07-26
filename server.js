@@ -86,7 +86,11 @@ const ObyBudgetSchema = new mongoose.Schema({
   immobiliDaAcquisire: { type: Number, default: 0 },
   cdv2Necessarie: { type: Number, default: 0 },
   cdv1Necessarie: { type: Number, default: 0 },
-  notizieNecessarie: { type: Number, default: 0 }
+  notizieNecessarie: { type: Number, default: 0 },
+  kpi: { type: mongoose.Schema.Types.Mixed, default: {} },  // parametri del funnel, modificabili dal consulente
+  kpiPartenza: { type: mongoose.Schema.Types.Mixed, default: {} }, // fotografia dei KPI all'avvio del monitoraggio
+  dataInizioMonitoraggio: { type: String, default: '' },
+  dataFineMonitoraggio: { type: String, default: '' }
 }, { timestamps: true });
 const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 
@@ -707,6 +711,12 @@ app.delete('/api/todo/:id', async (req, res) => {
     if (!eliminato) return res.status(404).json({ error: 'Task non trovato' });
     res.status(200).json({ status: 'success', message: 'Task eliminato con successo' });
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Tutti gli Oby: serve alla scheda di monitoraggio per confrontare i consulenti */
+app.get('/api/oby-budget', async (req, res) => {
+  try { res.status(200).json(await ObyBudget.find({})); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.get('/api/oby-budget/:consulente', async (req, res) => {
