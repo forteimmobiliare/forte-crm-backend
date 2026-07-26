@@ -125,6 +125,7 @@ const Stradario = mongoose.model('Stradario', StradarioSchema);
    4. MODELLO CONCORRENZA MANUALE ED EXCEL
 ========================================== */
 const ConcorrenzaSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   titolo: { type: String, required: true },
   comune: { type: String, default: '' }, // per filtrare la Concorrenza per comune/zona
   via: { type: String, default: '' }, // collegata (con suggerimenti) allo Stradario
@@ -140,7 +141,9 @@ const ConcorrenzaSchema = new mongoose.Schema({
   privato: { type: String, default: '' }, // '' (agenzia) | 'VDP' | 'VDP NO NUMERO'
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
-  statoAnnuncio: { type: String, default: 'Attivo' } // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
+  statoAnnuncio: { type: String, default: 'Attivo' }, // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
+  lat: { type: Number, default: null },  // coordinate calcolate una volta sola e riusate dalla mappa
+  lng: { type: Number, default: null }
 }, { timestamps: true });
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
@@ -212,6 +215,7 @@ app.delete('/api/agenti-immobiliari/:id', async (req, res) => {
    4b. MODELLO CENTRALINO (REGISTRO CHIAMATE) MANUALE ED EXCEL
 ========================================== */
 const CentralinoSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nome: { type: String, required: true },
   tipoRichiesta: { type: String, default: 'Mail Richiesta Specifica' },
   stato: { type: String, default: 'Da Fare' },
@@ -241,6 +245,7 @@ const Centralino = mongoose.model('Centralino', CentralinoSchema);
    e gestibile anche manualmente.
 ========================================== */
 const BancaDatiSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nomeCognome: { type: String, required: true },
   mail: { type: String, default: '' },
   telefono: { type: String, default: '' },
@@ -263,6 +268,7 @@ const BancaDati = mongoose.model('BancaDati', BancaDatiSchema);
    Creato automaticamente quando un item di Banca Dati passa a Stato ADV FIX = "Fissato".
 ========================================== */
 const VisioniSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nomeCognome: { type: String, required: true },
   telefono: { type: String, default: '' },
   mail: { type: String, default: '' },
@@ -276,6 +282,7 @@ const VisioniSchema = new mongoose.Schema({
 const Visioni = mongoose.model('Visioni', VisioniSchema);
 
 const PropostaSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nomeCognome: { type: String, default: '' },
   telefono: { type: String, default: '' },
   mail: { type: String, default: '' },
@@ -310,6 +317,7 @@ const Proposta = mongoose.model('Proposta', PropostaSchema);
    Creato in automatico quando una Proposta passa a stato "Accettata".
 ========================================== */
 const TransazioneSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   propostaOrigineId: { type: String, default: '' },   // evita doppioni sulla stessa proposta
   incaricoUfficio: { type: String, default: '' },
   statoTransazione: { type: String, default: 'Da Fare Preliminare' }, // Vincolata | Da Fare Preliminare | Fare Preliminare | Da Rogitare | Rogitate
@@ -336,6 +344,7 @@ const Transazione = mongoose.model('Transazione', TransazioneSchema);
    Rubrica della rete: BNI, professionisti, clienti rogitati.
 ========================================== */
 const ProfessionistaSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nome: { type: String, required: true },
   gruppo: { type: String, default: '' },              // BNI, Acquirenti Rogitati, ...
   ultimoContatto: { type: String, default: '' },
@@ -361,6 +370,7 @@ const Professionista = mongoose.model('Professionista', ProfessionistaSchema);
    4h. MODELLO OPPORTUNITY (Acquisizione > Notizie)
 ========================================== */
 const OpportunitySchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nome: { type: String, default: '' },
   persone: { type: String, default: '' },              // consulente assegnato
   posizione: { type: String, default: '' },
@@ -397,6 +407,7 @@ const Opportunity = mongoose.model('Opportunity', OpportunitySchema);
    4i. MODELLO CDV (Comparativa di Vendita)
 ========================================== */
 const CdvSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nome: { type: String, default: '' },
   livello: { type: String, default: 'Info' },          // Info | Opportunity
   posizione: { type: String, default: '' },
@@ -471,6 +482,7 @@ const Cdv = mongoose.model('Cdv', CdvSchema);
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   nome: { type: String, required: true },
   idElemento: { type: String, default: '' },
   statoImmobile: { type: String, default: '' },
@@ -1569,6 +1581,7 @@ const ColonnaPersonalizzataSchema = new mongoose.Schema({
 });
 
 const RigaPersonalizzataSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },   // username del consulente a cui e' assegnata la riga
   valori: { type: mongoose.Schema.Types.Mixed, default: {} } // { colonnaId: valore (stringa, o array per 'collegamento') }
 }, { timestamps: true });
 
