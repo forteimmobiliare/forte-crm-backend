@@ -515,6 +515,171 @@ const CdvSchema = new mongoose.Schema({
 const Cdv = mongoose.model('Cdv', CdvSchema);
 
 /* ==========================================
+   4l. MODELLO VALUTAZIONI IMMOBILIARI
+   Scheda compilata dal consulente, da cui nasce il fascicolo di stima.
+========================================== */
+const ValutazioneSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  nomeCliente: { type: String, default: '' },
+  emailCliente: { type: String, default: '' },
+  telefonoCliente: { type: String, default: '' },
+  comune: { type: String, default: '' },
+  zona: { type: String, default: '' },
+  via: { type: String, default: '' },
+  civico: { type: String, default: '' },
+  motivo: { type: String, default: '' },
+  occupazione: { type: String, default: '' },
+  titolarita: { type: String, default: '' },
+  visura: { type: String, default: '' },
+  ape: { type: String, default: '' },
+  planimetria: { type: String, default: '' },
+  pratiche: { type: String, default: '' },
+  identificativi: { type: String, default: '' },
+  rendita: { type: String, default: '' },
+  mq: { type: String, default: '' },
+  tipologia: { type: String, default: '' },
+  locali: { type: String, default: '' },
+  bagni: { type: String, default: '' },
+  piano: { type: String, default: '' },
+  ascensore: { type: String, default: '' },
+  esposizione: { type: String, default: '' },
+  stato: { type: String, default: '' },
+  annoRistrutturazione: { type: String, default: '' },
+  riscaldamento: { type: String, default: '' },
+  infissi: { type: String, default: '' },
+  accessori: { type: String, default: '' },
+  epoca: { type: String, default: '' },
+  annoCostruzione: { type: String, default: '' },
+  speseCondominiali: { type: String, default: '' },
+  partiComuni: { type: String, default: '' },
+  serviziComuni: { type: String, default: '' },
+  rumore: { type: String, default: '' },
+  prezzoBaseMq: { type: String, default: '' },
+  notaZona: { type: String, default: '' },
+  zonaOmi: { type: String, default: '' },
+  quotazioneOmiMin: { type: String, default: '' },
+  quotazioneOmiMax: { type: String, default: '' },
+  valoreConsigliato: { type: String, default: '' },
+  valoreMinimo: { type: String, default: '' },
+  valoreMassimo: { type: String, default: '' },
+  valoreAlMq: { type: String, default: '' }
+}, { timestamps: true });
+const Valutazione = mongoose.model('Valutazione', ValutazioneSchema);
+
+/* ==========================================
+   4n. COEFFICIENTI DI VALUTAZIONE
+   I moltiplicatori che correggono il prezzo base della zona: piano, ascensore,
+   esposizione, stato... Stanno sul database e si modificano dal CRM.
+========================================== */
+const CoefficienteSchema = new mongoose.Schema({
+  famiglia: { type: String, default: '' },   // es. 'piano', 'ascensore', 'stato'
+  voce: { type: String, default: '' },       // es. 'Ultimo piano con ascensore'
+  valore: { type: Number, default: 1 },
+  ordine: { type: Number, default: 0 }
+}, { timestamps: true });
+CoefficienteSchema.index({ famiglia: 1, voce: 1 }, { unique: true });
+const Coefficiente = mongoose.model('Coefficiente', CoefficienteSchema);
+
+/* Valori di partenza, scritti solo se la collezione e' vuota: da li' in poi comandano
+   quelli salvati dall'agenzia. */
+const COEFFICIENTI_STANDARD = [
+  ['tipologia', 'Appartamento standard', 1.00], ['tipologia', 'Appartamento signorile / Attico', 1.15],
+  ['tipologia', 'Villa Singola', 1.25], ['tipologia', 'Villa a Schiera', 1.10],
+  ['stato', 'Ristrutturato a nuovo', 1.20], ['stato', 'Buono / Abitabile subito', 1.00],
+  ['stato', 'Completamente da ristrutturare', 0.75],
+  ['piano', 'Seminterrato', 0.75], ['piano', 'Piano terra', 0.85], ['piano', 'Primo piano', 0.95],
+  ['piano', 'Piano intermedio', 1.00], ['piano', 'Ultimo piano con ascensore', 1.05],
+  ['piano', 'Ultimo piano senza ascensore', 0.90], ['piano', 'Attico', 1.15],
+  ['ascensore', 'S\u00ec, presente', 1.00], ['ascensore', 'No, assente', 0.95],
+  ['esposizione', 'Doppia / passante', 1.05], ['esposizione', 'Singola luminosa', 1.00],
+  ['esposizione', 'Interna / poca luce', 0.93],
+  /* Vetusta': curva del Borsino Immobiliare FIMAA (-1% l'anno per i primi 15 anni,
+     poi -0,5% fino al 45esimo, minimo 0,70), normalizzata sull'eta' tipica della zona. */
+  ['vetusta', 'Calo annuo primi 15 anni (%)', 1.0],
+  ['vetusta', 'Calo annuo dal 16\u00b0 anno (%)', 0.5],
+  ['vetusta', 'Coefficiente minimo', 0.70],
+  ['vetusta', 'Vetust\u00e0 di riferimento (anni)', 30],
+  ['rumore', 'Via silenziosa e interna', 1.02], ['rumore', 'Zona trafficata / commerciale', 0.96],
+  ['partiComuni', 'In buono stato', 1.00], ['partiComuni', 'Interventi da fare', 0.95]
+];
+
+async function seminaCoefficienti() {
+  try {
+    /* Inserisce solo le voci mancanti: i valori gia' modificati dall'agenzia
+       restano come sono, anche quando aggiungiamo una famiglia nuova. */
+    await Coefficiente.bulkWrite(COEFFICIENTI_STANDARD.map((c, i) => ({
+      updateOne: {
+        filter: { famiglia: c[0], voce: c[1] },
+        update: { $setOnInsert: { famiglia: c[0], voce: c[1], valore: c[2], ordine: i } },
+        upsert: true
+      }
+    })));
+  } catch (err) { console.error('Coefficienti non inizializzati:', err.message); }
+}
+
+app.get('/api/coefficienti', async (req, res) => {
+  try {
+    await seminaCoefficienti();
+    res.status(200).json(await Coefficiente.find({}).sort({ famiglia: 1, ordine: 1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/coefficienti/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined) ? { [req.body.campo]: req.body.valore } : req.body;
+    const aggiornato = await Coefficiente.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Coefficiente non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Torna ai valori standard */
+app.post('/api/coefficienti/ripristina', async (req, res) => {
+  try {
+    await Coefficiente.deleteMany({});
+    await seminaCoefficienti();
+    res.status(200).json({ status: 'success', coefficienti: await Coefficiente.find({}).sort({ famiglia: 1, ordine: 1 }) });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+
+/* ==========================================
+   4m. ZONE OMI (Agenzia delle Entrate)
+   I perimetri si caricano dall'interfaccia del CRM, non dal codice:
+   ogni semestre si riscarica il pacchetto da Geopoi e si reimporta.
+   Le quotazioni si compilano a mano leggendole dalla mappa pubblica.
+========================================== */
+const ZonaOmiSchema = new mongoose.Schema({
+  comune: { type: String, default: '' },
+  codiceComune: { type: String, default: '' },
+  zona: { type: String, default: '' },
+  semestre: { type: String, default: '' },          // es. "2025-2"
+  poligoni: { type: Array, default: [] },           // [[[lng,lat], ...], ...]
+  // quotazioni lette da Geopoi, in euro al metro quadro
+  quotazioneMin: { type: String, default: '' },
+  quotazioneMax: { type: String, default: '' },
+  quotazioneTipologia: { type: String, default: 'Abitazioni civili' },
+  quotazioneStato: { type: String, default: 'Normale' },
+  aggiornataIl: { type: String, default: '' }
+}, { timestamps: true });
+ZonaOmiSchema.index({ comune: 1, zona: 1, semestre: 1 }, { unique: true });
+const ZonaOmi = mongoose.model('ZonaOmi', ZonaOmiSchema);
+
+/* Il punto e' dentro il poligono? Algoritmo del raggio: conto quante volte
+   una semiretta uscente dal punto attraversa i lati. Dispari = dentro. */
+function puntoDentroPoligono(lng, lat, anello) {
+  let dentro = false;
+  for (let i = 0, j = anello.length - 1; i < anello.length; j = i++) {
+    const xi = anello[i][0], yi = anello[i][1];
+    const xj = anello[j][0], yj = anello[j][1];
+    const attraversa = ((yi > lat) !== (yj > lat)) &&
+      (lng < (xj - xi) * (lat - yi) / ((yj - yi) || 1e-12) + xi);
+    if (attraversa) dentro = !dentro;
+  }
+  return dentro;
+}
+
+/* ==========================================
    4c. MODELLO INCARICHI GESTIONE MANUALE ED EXCEL
 ========================================== */
 const IncaricoSchema = new mongoose.Schema({
@@ -1293,6 +1458,100 @@ function registraRotteScheda(percorso, Modello, nomeUmano) {
 }
 
 registraRotteScheda('opportunity', Opportunity, 'Opportunity');
+registraRotteScheda('valutazioni', Valutazione, 'Valutazione');
+
+/* ==========================================
+   ROTTE API: ZONE OMI
+========================================== */
+/* Elenco: di default senza i perimetri, che sono pesanti e servono solo al server */
+app.get('/api/zone-omi', async (req, res) => {
+  try {
+    const filtro = {};
+    if (req.query.comune) filtro.comune = new RegExp('^' + req.query.comune.trim() + '$', 'i');
+    if (req.query.semestre) filtro.semestre = req.query.semestre;
+    const proiezione = req.query.conPerimetri === 'si' ? {} : { poligoni: 0 };
+    res.status(200).json(await ZonaOmi.find(filtro, proiezione).sort({ comune: 1, zona: 1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Quali semestri sono caricati e con quante zone */
+app.get('/api/zone-omi/semestri', async (req, res) => {
+  try {
+    const dati = await ZonaOmi.aggregate([
+      { $group: { _id: '$semestre', zone: { $sum: 1 }, comuni: { $addToSet: '$comune' },
+                  conQuotazione: { $sum: { $cond: [{ $gt: ['$quotazioneMin', ''] }, 1, 0] } } } },
+      { $project: { semestre: '$_id', zone: 1, conQuotazione: 1, comuni: { $size: '$comuni' }, _id: 0 } },
+      { $sort: { semestre: -1 } }
+    ]);
+    res.status(200).json(dati);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* In quale zona OMI cade un punto: il calcolo pesante resta sul server */
+app.get('/api/zone-omi/cerca', async (req, res) => {
+  try {
+    const lat = parseFloat(req.query.lat), lng = parseFloat(req.query.lng);
+    if (isNaN(lat) || isNaN(lng)) return res.status(400).json({ error: 'Servono lat e lng' });
+
+    const filtro = {};
+    if (req.query.comune) filtro.comune = new RegExp('^' + req.query.comune.trim() + '$', 'i');
+    if (req.query.semestre) filtro.semestre = req.query.semestre;
+    const candidate = await ZonaOmi.find(filtro);
+
+    for (const z of candidate) {
+      for (const anello of (z.poligoni || [])) {
+        if (puntoDentroPoligono(lng, lat, anello)) {
+          const { poligoni, ...senzaGeometria } = z.toObject();
+          return res.status(200).json({ trovata: true, zona: senzaGeometria });
+        }
+      }
+    }
+    res.status(200).json({ trovata: false, zoneEsaminate: candidate.length });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Import massivo dei perimetri: arriva a lotti dal CRM */
+app.post('/api/zone-omi/massivo', async (req, res) => {
+  try {
+    const zone = Array.isArray(req.body) ? req.body : (req.body.zone || []);
+    if (!zone.length) return res.status(400).json({ error: 'Nessuna zona ricevuta' });
+
+    let inserite = 0, aggiornate = 0;
+    for (const z of zone) {
+      if (!z.comune || !z.zona || !z.semestre) continue;
+      const esistente = await ZonaOmi.findOne({ comune: z.comune, zona: z.zona, semestre: z.semestre });
+      if (esistente) {
+        // i perimetri si aggiornano, le quotazioni gia' inserite non si toccano
+        esistente.poligoni = z.poligoni || esistente.poligoni;
+        esistente.codiceComune = z.codiceComune || esistente.codiceComune;
+        await esistente.save();
+        aggiornate++;
+      } else {
+        await new ZonaOmi(z).save();
+        inserite++;
+      }
+    }
+    res.status(200).json({ status: 'success', inserite, aggiornate });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Aggiornamento di una singola zona (tipicamente le quotazioni) */
+app.put('/api/zone-omi/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined) ? { [req.body.campo]: req.body.valore } : req.body;
+    const aggiornata = await ZonaOmi.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true, projection: { poligoni: 0 } });
+    if (!aggiornata) return res.status(404).json({ error: 'Zona non trovata' });
+    res.status(200).json({ status: 'success', data: aggiornata });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Ripulire un semestre intero, se un import va storto */
+app.delete('/api/zone-omi/semestre/:semestre', async (req, res) => {
+  try {
+    const esito = await ZonaOmi.deleteMany({ semestre: req.params.semestre });
+    res.status(200).json({ status: 'success', eliminate: esito.deletedCount });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 registraRotteScheda('cdv', Cdv, 'Cdv');
 
 app.get('/api/professionisti', async (req, res) => {
