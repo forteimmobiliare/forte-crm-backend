@@ -70,9 +70,84 @@ const TodoSchema = new mongoose.Schema({
   task: { type: String, required: true },
   consulente: { type: String, default: '' },
   stato: { type: String, default: 'Attivo' },
-  note: { type: String, default: '' }
+  note: { type: String, default: '' },
+  /* Campi delle attivita' generate dal CRM: origine identifica la riga che l'ha creata,
+     cosi' non si duplica e si chiude da sola quando il motivo viene meno. */
+  origine: { type: String, default: '' },
+  automatica: { type: Boolean, default: false },
+  priorita: { type: String, default: 'Normale' },
+  scadenza: { type: String, default: '' },   // formato aaaa-mm-gg, per ordinare
+  collegamento: { type: String, default: '' }
 }, { timestamps: true });
 const Todo = mongoose.model('Todo', TodoSchema);
+
+/* ==========================================
+   MODELLI DI ATTIVITA'
+   Regole del tipo "quando succede X, crea l'attivita' Y e assegnala a Z".
+   Stanno sul database e si modificano dal CRM: cambiando processo non si tocca il codice.
+========================================== */
+const ModelloTaskSchema = new mongoose.Schema({
+  evento: { type: String, default: 'incarico' },   // incarico | preliminare | rogito | provvigione
+  testo: { type: String, default: '' },
+  assegnatario: { type: String, default: '' },     // username del consulente
+  giorni: { type: Number, default: 0 },            // giorni dall'evento (negativi = in anticipo)
+  priorita: { type: String, default: 'Normale' },
+  attivo: { type: Boolean, default: true },
+  ordine: { type: Number, default: 0 }
+}, { timestamps: true });
+const ModelloTask = mongoose.model('ModelloTask', ModelloTaskSchema);
+
+/* Regole di partenza: si scrivono una volta sola, poi comandano quelle salvate */
+const MODELLI_TASK_STANDARD = [
+  { evento: 'incarico',    testo: 'Fare il servizio fotografico',                              nomeAssegnatario: 'Alessandro Forte', giorni: 3, priorita: 'Alta' },
+  { evento: 'incarico',    testo: 'Editing e post-produzione delle foto',                      nomeAssegnatario: 'Giuseppe Mazzeo',  giorni: 5, priorita: 'Normale' },
+  { evento: 'incarico',    testo: 'Antiriciclaggio: adeguata verifica del venditore',          nomeAssegnatario: 'Arianna Mazzeo',   giorni: 2, priorita: 'Alta' },
+  { evento: 'preliminare', testo: 'Antiriciclaggio: adeguata verifica per il preliminare',     nomeAssegnatario: 'Arianna Mazzeo',   giorni: 0, priorita: 'Alta' },
+  { evento: 'rogito',      testo: 'Antiriciclaggio: verifica finale al rogito',                nomeAssegnatario: 'Arianna Mazzeo',   giorni: 0, priorita: 'Alta' },
+  { evento: 'provvigione', testo: 'Preparare la fattura della provvigione',                    nomeAssegnatario: 'Arianna Mazzeo',   giorni: -3, priorita: 'Alta' }
+];
+
+async function seminaModelliTask() {
+  try {
+    if (await ModelloTask.countDocuments() > 0) return;
+    const consulenti = await Consulente.find({});
+    const trovaUtente = (nome) => {
+      const c = consulenti.find(x => (x.nomeCognome || '').trim().toLowerCase() === nome.trim().toLowerCase());
+      return c ? c.utente : '';
+    };
+    await ModelloTask.insertMany(MODELLI_TASK_STANDARD.map((m, i) => ({
+      evento: m.evento, testo: m.testo, giorni: m.giorni, priorita: m.priorita,
+      assegnatario: trovaUtente(m.nomeAssegnatario), attivo: true, ordine: i
+    })));
+    console.log('Modelli di attivita inizializzati.');
+  } catch (err) { console.error('Modelli attivita non inizializzati:', err.message); }
+}
+
+app.get('/api/modelli-task', async (req, res) => {
+  try {
+    await seminaModelliTask();
+    res.status(200).json(await ModelloTask.find({}).sort({ evento: 1, ordine: 1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/modelli-task', async (req, res) => {
+  try { res.status(201).json({ status: 'success', data: await new ModelloTask(req.body).save() }); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/modelli-task/:id', async (req, res) => {
+  try {
+    const payload = (req.body && req.body.campo !== undefined) ? { [req.body.campo]: req.body.valore } : req.body;
+    const aggiornato = await ModelloTask.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Modello non trovato' });
+    res.status(200).json({ status: 'success', data: aggiornato });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/modelli-task/:id', async (req, res) => {
+  try { await ModelloTask.findByIdAndDelete(req.params.id); res.status(200).json({ status: 'success' }); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
 
 /* ==========================================
    2. MODELLO TARGET & BUDGET (OBY)
@@ -99,6 +174,8 @@ const ObyBudget = mongoose.model('ObyBudget', ObyBudgetSchema);
 ========================================== */
 const StradarioSchema = new mongoose.Schema({
   comune: { type: String, required: true, unique: true },
+  ultimoCensimento: { type: String, default: '' },   // aaaa-mm-gg dell'ultima ricognizione dichiarata
+  censitoDa: { type: String, default: '' },
   provincia: { type: String, default: 'MI' },
   abitanti: { type: String, default: 'N.D.' },
   subalterniTotali: { type: Number, default: 5000 },
@@ -870,6 +947,44 @@ app.post('/api/todo', async (req, res) => {
 
 app.put('/api/todo/:id', async (req, res) => {
   try { res.status(200).json({ status: 'success', data: await Todo.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true }) }); } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Allinea le attivita' automatiche: crea quelle nuove, chiude quelle che non servono piu'.
+   Le attivita' scritte a mano dai consulenti non vengono mai toccate. */
+app.post('/api/todo/sincronizza', async (req, res) => {
+  try {
+    const attese = Array.isArray(req.body) ? req.body : (req.body.attivita || []);
+    const chiaviAttese = attese.map(a => a.origine).filter(Boolean);
+
+    const esistenti = await Todo.find({ automatica: true });
+    const perOrigine = {};
+    esistenti.forEach(e => { perOrigine[e.origine] = e; });
+
+    let create = 0, aggiornate = 0, chiuse = 0;
+    for (const a of attese) {
+      if (!a.origine || !a.task) continue;
+      const gia = perOrigine[a.origine];
+      if (gia) {
+        /* Se il consulente l'ha gia' spuntata non la resuscito: una lista di controllo
+           spuntata deve restare spuntata, altrimenti riappare all'infinito. */
+        if (gia.stato === 'Completato') continue;
+        gia.task = a.task; gia.data = a.data; gia.scadenza = a.scadenza || '';
+        gia.priorita = a.priorita || 'Normale'; gia.consulente = a.consulente || gia.consulente;
+        gia.collegamento = a.collegamento || '';
+        await gia.save(); aggiornate++;
+      } else {
+        await new Todo(Object.assign({ automatica: true, stato: 'Attivo' }, a)).save();
+        create++;
+      }
+    }
+
+    // quello che non e' piu' nell'elenco atteso ha esaurito il suo motivo di esistere,
+    // ma le attivita' gia' completate restano come storico
+    const daChiudere = esistenti.filter(e => chiaviAttese.indexOf(e.origine) === -1 && e.stato !== 'Completato');
+    for (const e of daChiudere) { await Todo.findByIdAndDelete(e._id); chiuse++; }
+
+    res.status(200).json({ status: 'success', create, aggiornate, chiuse });
+  } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
 app.delete('/api/todo/:id', async (req, res) => {
