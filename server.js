@@ -5,7 +5,7 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({ limit: '50mb' }));   // i lotti dei perimetri OMI possono essere pesanti
 
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
