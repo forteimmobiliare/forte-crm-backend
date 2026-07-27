@@ -1535,6 +1535,35 @@ app.post('/api/zone-omi/massivo', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
+/* Import massivo delle quotazioni: arrivano dal CSV ufficiale dell'Agenzia.
+   Si abbinano alle zone gia' caricate per comune + sigla zona. */
+app.post('/api/zone-omi/quotazioni', async (req, res) => {
+  try {
+    const righe = Array.isArray(req.body) ? req.body : (req.body.righe || []);
+    if (!righe.length) return res.status(400).json({ error: 'Nessuna quotazione ricevuta' });
+
+    let aggiornate = 0, nonAbbinate = 0;
+    for (const r of righe) {
+      if (!r.comune || !r.zona) continue;
+      const filtro = {
+        comune: new RegExp('^' + String(r.comune).trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
+        zona: new RegExp('^' + String(r.zona).trim() + '$', 'i')
+      };
+      if (r.semestre) filtro.semestre = r.semestre;
+
+      const payload = {};
+      if (r.quotazioneMin !== undefined) payload.quotazioneMin = String(r.quotazioneMin);
+      if (r.quotazioneMax !== undefined) payload.quotazioneMax = String(r.quotazioneMax);
+      if (r.quotazioneTipologia) payload.quotazioneTipologia = r.quotazioneTipologia;
+      if (r.quotazioneStato) payload.quotazioneStato = r.quotazioneStato;
+
+      const esito = await ZonaOmi.updateMany(filtro, { $set: payload });
+      if (esito.matchedCount > 0) aggiornate += esito.matchedCount; else nonAbbinate++;
+    }
+    res.status(200).json({ status: 'success', aggiornate, nonAbbinate });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
 /* Aggiornamento di una singola zona (tipicamente le quotazioni) */
 app.put('/api/zone-omi/:id', async (req, res) => {
   try {
