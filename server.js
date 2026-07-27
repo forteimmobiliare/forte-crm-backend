@@ -559,6 +559,7 @@ const ValutazioneSchema = new mongoose.Schema({
   zonaOmi: { type: String, default: '' },
   quotazioneOmiMin: { type: String, default: '' },
   quotazioneOmiMax: { type: String, default: '' },
+  comparabili: { type: Array, default: [] },
   valoreConsigliato: { type: String, default: '' },
   valoreMinimo: { type: String, default: '' },
   valoreMassimo: { type: String, default: '' },
