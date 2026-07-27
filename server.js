@@ -639,6 +639,7 @@ const ValutazioneSchema = new mongoose.Schema({
   quotazioneOmiMin: { type: String, default: '' },
   quotazioneOmiMax: { type: String, default: '' },
   comparabili: { type: Array, default: [] },
+  origine: { type: String, default: '' },   // "Landing pubblica" per le richieste dal sito
   valoreConsigliato: { type: String, default: '' },
   valoreMinimo: { type: String, default: '' },
   valoreMassimo: { type: String, default: '' },
@@ -1689,6 +1690,95 @@ app.put('/api/zone-omi/:id', async (req, res) => {
     const aggiornata = await ZonaOmi.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true, projection: { poligoni: 0 } });
     if (!aggiornata) return res.status(404).json({ error: 'Zona non trovata' });
     res.status(200).json({ status: 'success', data: aggiornata });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
+   ROTTE PUBBLICHE PER LA LANDING DI VALUTAZIONE
+   Espongono il minimo indispensabile: zone con quotazioni e coefficienti.
+   Nessun dato di clienti, incarichi o consulenti passa di qui.
+========================================== */
+app.get('/api/pubblico/valutazione-dati', async (req, res) => {
+  try {
+    const zone = await ZonaOmi.find({ quotazioneMin: { $nin: ['', null] } },
+      { comune: 1, zona: 1, descrizioneZona: 1, quotazioneMin: 1, quotazioneMax: 1, semestre: 1, _id: 0 })
+      .sort({ comune: 1, zona: 1 });
+
+    await seminaCoefficienti();
+    const coefficienti = await Coefficiente.find({}, { famiglia: 1, voce: 1, valore: 1, _id: 0 }).sort({ famiglia: 1, ordine: 1 });
+
+    res.set('Cache-Control', 'public, max-age=3600');   // cambia due volte l'anno: inutile richiederlo ogni volta
+    res.status(200).json({ zone, coefficienti });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* La richiesta compilata dal visitatore diventa una valutazione nel CRM,
+   senza consulente assegnato: la prende chi la lavora. */
+app.post('/api/pubblico/valutazione', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.nomeCliente || !b.telefonoCliente) {
+      return res.status(400).json({ error: 'Servono almeno nome e telefono' });
+    }
+    const consentiti = ['nomeCliente', 'emailCliente', 'telefonoCliente', 'comune', 'zona', 'zonaOmi', 'via', 'civico',
+      'motivo', 'mq', 'tipologia', 'locali', 'bagni', 'piano', 'ascensore', 'esposizione', 'stato',
+      'annoCostruzione', 'rumore', 'partiComuni', 'prezzoBaseMq', 'notaZona',
+      'quotazioneOmiMin', 'quotazioneOmiMax', 'valoreConsigliato', 'valoreMinimo', 'valoreMassimo', 'valoreAlMq'];
+    const dati = { origine: 'Landing pubblica' };
+    consentiti.forEach(c => { if (b[c] !== undefined) dati[c] = String(b[c]); });
+
+    const salvata = await new Valutazione(dati).save();
+    res.status(201).json({ status: 'success', id: salvata._id });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Quanto spazio occupa ogni collezione: serve a capire cosa sta riempiendo il piano gratuito */
+app.get('/api/spazio', async (req, res) => {
+  try {
+    const db = mongoose.connection.db;
+    const generale = await db.stats();
+    const collezioni = await db.listCollections().toArray();
+
+    const dettaglio = [];
+    for (const c of collezioni) {
+      try {
+        const s = await db.command({ collStats: c.name });
+        dettaglio.push({
+          nome: c.name,
+          documenti: s.count || 0,
+          dati: s.size || 0,
+          indici: s.totalIndexSize || 0,
+          totale: (s.storageSize || 0) + (s.totalIndexSize || 0)
+        });
+      } catch (e) { /* collezione di sistema: la salto */ }
+    }
+    dettaglio.sort((a, b) => b.totale - a.totale);
+
+    res.status(200).json({
+      limite: 512 * 1024 * 1024,
+      dati: generale.dataSize || 0,
+      archiviato: generale.storageSize || 0,
+      indici: generale.indexSize || 0,
+      occupato: (generale.storageSize || 0) + (generale.indexSize || 0),
+      collezioni: dettaglio
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Alleggerimento: butta via i perimetri tenendo zone e quotazioni.
+   I poligoni sono il grosso dell'ingombro e non servono alle valutazioni. */
+app.delete('/api/zone-omi/perimetri', async (req, res) => {
+  try {
+    const esito = await ZonaOmi.updateMany({ 'poligoni.0': { $exists: true } }, { $set: { poligoni: [] } });
+    res.status(200).json({ status: 'success', alleggerite: esito.modifiedCount });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* Cancella tutte le zone OMI: la via piu' rapida per liberare spazio */
+app.delete('/api/zone-omi', async (req, res) => {
+  try {
+    const esito = await ZonaOmi.deleteMany({});
+    res.status(200).json({ status: 'success', eliminate: esito.deletedCount });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
