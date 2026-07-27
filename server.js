@@ -1694,6 +1694,58 @@ app.put('/api/zone-omi/:id', async (req, res) => {
 });
 
 /* ==========================================
+   MERCATO DEL COMUNE — volumi di compravendita OMI
+   Il NTN (numero transazioni normalizzate) e' annuale e per comune.
+   Caricando piu' annualita' si ottiene l'andamento nel tempo.
+========================================== */
+const MercatoComuneSchema = new mongoose.Schema({
+  comune: { type: String, default: '' },
+  codiceComune: { type: String, default: '' },   // codice catastale, es. E514
+  provincia: { type: String, default: '' },
+  anno: { type: String, default: '' },
+  ntn: { type: Number, default: 0 },             // transazioni residenziali dell'anno
+  fasce: { type: Object, default: {} },          // ripartizione per superficie
+  tagliaMercato: { type: String, default: '' }   // S, M, L come classificata dall'Agenzia
+}, { timestamps: true });
+MercatoComuneSchema.index({ codiceComune: 1, anno: 1 }, { unique: true });
+const MercatoComune = mongoose.model('MercatoComune', MercatoComuneSchema);
+
+app.get('/api/mercato', async (req, res) => {
+  try {
+    const filtro = {};
+    if (req.query.comune) filtro.comune = new RegExp('^' + String(req.query.comune).trim() + '$', 'i');
+    res.status(200).json(await MercatoComune.find(filtro).sort({ comune: 1, anno: 1 }));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/mercato/massivo', async (req, res) => {
+  try {
+    const righe = Array.isArray(req.body) ? req.body : [];
+    if (!righe.length) return res.status(400).json({ error: 'Nessun dato ricevuto' });
+
+    let inserite = 0, aggiornate = 0;
+    for (const r of righe) {
+      if (!r.codiceComune || !r.anno) continue;
+      const esistente = await MercatoComune.findOne({ codiceComune: r.codiceComune, anno: String(r.anno) });
+      if (esistente) {
+        Object.assign(esistente, r, { anno: String(r.anno) });
+        await esistente.save(); aggiornate++;
+      } else {
+        await new MercatoComune(Object.assign({}, r, { anno: String(r.anno) })).save(); inserite++;
+      }
+    }
+    res.status(200).json({ status: 'success', inserite, aggiornate });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/mercato/anno/:anno', async (req, res) => {
+  try {
+    const esito = await MercatoComune.deleteMany({ anno: req.params.anno });
+    res.status(200).json({ status: 'success', eliminate: esito.deletedCount });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+/* ==========================================
    ROTTE PUBBLICHE PER LA LANDING DI VALUTAZIONE
    Espongono il minimo indispensabile: zone con quotazioni e coefficienti.
    Nessun dato di clienti, incarichi o consulenti passa di qui.
@@ -1707,8 +1759,116 @@ app.get('/api/pubblico/valutazione-dati', async (req, res) => {
     await seminaCoefficienti();
     const coefficienti = await Coefficiente.find({}, { famiglia: 1, voce: 1, valore: 1, _id: 0 }).sort({ famiglia: 1, ordine: 1 });
 
+    const mercato = await MercatoComune.find({}, { comune: 1, anno: 1, ntn: 1, fasce: 1, tagliaMercato: 1, _id: 0 })
+      .sort({ comune: 1, anno: 1 });
+
     res.set('Cache-Control', 'public, max-age=3600');   // cambia due volte l'anno: inutile richiederlo ogni volta
-    res.status(200).json({ zone, coefficienti });
+    res.status(200).json({ zone, coefficienti, mercato });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Servizi vicini all'indirizzo, per la pagina "dove si trova" del documento.
+   La chiave Google resta sul server: la pagina pubblica non la vede mai. */
+const CHIAVE_GOOGLE = process.env.GOOGLE_MAPS_KEY || '';
+
+app.get('/api/pubblico/dintorni', async (req, res) => {
+  try {
+    if (!CHIAVE_GOOGLE) return res.status(200).json({ attivo: false, punti: [] });
+    const indirizzo = String(req.query.indirizzo || '').trim();
+    if (!indirizzo) return res.status(400).json({ error: 'Indirizzo mancante' });
+
+    const chiedi = (url) => new Promise((risolvi, rifiuta) => {
+      https.get(url, r => {
+        let corpo = '';
+        r.on('data', c => corpo += c);
+        r.on('end', () => { try { risolvi(JSON.parse(corpo)); } catch (e) { rifiuta(e); } });
+      }).on('error', rifiuta);
+    });
+
+    const geo = await chiedi('https://maps.googleapis.com/maps/api/geocode/json?address=' +
+      encodeURIComponent(indirizzo) + '&region=it&components=country:IT&key=' + CHIAVE_GOOGLE);
+    if (!geo.results || !geo.results[0]) return res.status(200).json({ attivo: true, punti: [] });
+    const punto = geo.results[0].geometry.location;
+
+    /* Una categoria per volta, tenendo il piu' vicino: e' quello che interessa a chi compra */
+    const categorie = [
+      { tipo: 'transit_station', etichetta: 'Trasporto pubblico' },
+      { tipo: 'supermarket', etichetta: 'Supermercato' },
+      { tipo: 'school', etichetta: 'Scuola' },
+      { tipo: 'pharmacy', etichetta: 'Farmacia' },
+      { tipo: 'park', etichetta: 'Verde pubblico' }
+    ];
+
+    const distanza = (a, b) => {
+      const R = 6371000, rad = g => g * Math.PI / 180;
+      const dLat = rad(b.lat - a.lat), dLng = rad(b.lng - a.lng);
+      const x = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a.lat)) * Math.cos(rad(b.lat)) * Math.sin(dLng / 2) ** 2;
+      return Math.round(R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x)));
+    };
+
+    const punti = [];
+    for (const c of categorie) {
+      try {
+        const r = await chiedi('https://maps.googleapis.com/maps/api/place/nearbysearch/json?location=' +
+          punto.lat + ',' + punto.lng + '&rankby=distance&type=' + c.tipo + '&key=' + CHIAVE_GOOGLE);
+        const primo = (r.results || [])[0];
+        if (primo) punti.push({
+          categoria: c.etichetta, nome: primo.name,
+          metri: distanza(punto, primo.geometry.location)
+        });
+      } catch (e) { /* una categoria che manca non ferma le altre */ }
+    }
+
+    res.set('Cache-Control', 'public, max-age=86400');
+    res.status(200).json({ attivo: true, lat: punto.lat, lng: punto.lng, punti });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* La mappa statica passa dal server per non esporre la chiave */
+app.get('/api/pubblico/mappa', async (req, res) => {
+  try {
+    if (!CHIAVE_GOOGLE) return res.status(404).send('mappa non configurata');
+    const indirizzo = encodeURIComponent(String(req.query.indirizzo || '').trim());
+    if (!indirizzo) return res.status(400).send('indirizzo mancante');
+    const url = 'https://maps.googleapis.com/maps/api/staticmap?center=' + indirizzo +
+      '&zoom=15&size=640x320&scale=2&language=it&maptype=roadmap' +
+      '&markers=color:0x0B3B4A%7Clabel:%7C' + indirizzo + '&key=' + CHIAVE_GOOGLE;
+    https.get(url, r => {
+      res.set('Content-Type', r.headers['content-type'] || 'image/png');
+      res.set('Cache-Control', 'public, max-age=86400');
+      r.pipe(res);
+    }).on('error', () => res.status(502).send('mappa non disponibile'));
+  } catch (err) { res.status(500).send(err.message); }
+});
+
+/* Gli annunci attualmente in pubblicita' nel comune, per la pagina comparabili.
+   Vengono dall'archivio Concorrenza: sono annunci pubblici, ma esco solo con
+   indirizzo, superficie e prezzo, senza il nome dell'agenzia che li pubblica. */
+app.get('/api/pubblico/comparabili', async (req, res) => {
+  try {
+    const comune = String(req.query.comune || '').trim();
+    if (!comune) return res.status(400).json({ error: 'Comune mancante' });
+
+    const righe = await Concorrenza.find({
+      comune: new RegExp('^' + comune.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
+      statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] }
+    }, { via: 1, civico: 1, comune: 1, prezzo: 1, mq: 1, locali: 1, unita: 1, statoImmobile: 1, _id: 0 })
+      .sort({ updatedAt: -1 }).limit(60);
+
+    const numero = (v) => Number(String(v == null ? '' : v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
+    const utili = righe
+      .map(r => {
+        const prezzo = numero(r.prezzo), mq = numero(r.mq);
+        return { via: r.via || '', civico: r.civico || '', comune: r.comune || '',
+                 prezzo: prezzo, mq: mq, locali: r.locali || '', tipo: r.unita || '',
+                 alMq: (prezzo > 0 && mq > 0) ? Math.round(prezzo / mq) : 0 };
+      })
+      .filter(r => r.alMq > 0)
+      .sort((a, b) => a.alMq - b.alMq)
+      .slice(0, 8);
+
+    res.set('Cache-Control', 'public, max-age=900');
+    res.status(200).json(utili);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
