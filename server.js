@@ -383,6 +383,8 @@ const VisioniSchema = new mongoose.Schema({
   feedbackAdv: { type: String, default: '' }, // Interessa | Valuta | Non Interessa
   testoFeedback: { type: String, default: '' },
   valorePercepito: { type: String, default: '' },
+  dataVisione: { type: String, default: '' },   // giorno dell'appuntamento, spostabile dal calendario
+  oraVisione: { type: String, default: '' },
   bancaDatiOrigineId: { type: String, default: '' }, // evita duplicati quando l'item torna "Fissato"
   propostaCreata: { type: Boolean, default: false }
 }, { timestamps: true });
