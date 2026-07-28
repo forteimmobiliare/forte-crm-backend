@@ -1942,6 +1942,89 @@ app.get('/api/pubblico/documento/:riferimento', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* ==========================================
+   RITOCCO DELLE FOTO CON GEMINI
+   Stesso endpoint dell'assistente, ma con un modello che sa restituire immagini:
+   gli si manda la foto e la richiesta a parole, torna la foto modificata.
+   La chiave resta qui: la pagina non la vede mai.
+========================================== */
+const GEMINI_MODELLO_IMMAGINI = process.env.GEMINI_MODELLO_IMMAGINI || 'gemini-3.1-flash-image';
+
+app.post('/api/foto-ritocco', async (req, res) => {
+  try {
+    if (!GEMINI_API_KEY) return res.status(503).json({ error: 'Chiave Gemini non configurata sul server' });
+
+    const { immagine, tipoMime, richiesta } = req.body || {};
+    if (!immagine) return res.status(400).json({ error: 'Immagine mancante' });
+    if (!richiesta || !String(richiesta).trim()) return res.status(400).json({ error: 'Manca la descrizione della modifica' });
+
+    /* Le istruzioni di contorno: senza queste il modello reinventa la stanza,
+       e una foto che non corrisponde all'immobile non si puo' pubblicare. */
+    const istruzioni = [
+      String(richiesta).trim(),
+      '',
+      'Vincoli da rispettare in ogni caso:',
+      '- non modificare la struttura della stanza: pareti, finestre, porte, altezza dei soffitti e prospettiva restano identiche',
+      '- non cambiare la vista dalle finestre',
+      "- mantieni la stessa luce e le stesse ombre dell'originale",
+      '- il risultato deve sembrare una fotografia reale della stessa stanza, non un rendering',
+      '- non aggiungere testo, filigrane o loghi'
+    ].join('\n');
+
+    const corpoRichiesta = JSON.stringify({
+      contents: [{
+        role: 'user',
+        parts: [
+          { inline_data: { mime_type: tipoMime || 'image/jpeg', data: immagine } },
+          { text: istruzioni }
+        ]
+      }],
+      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+    });
+
+    const risposta = await new Promise((risolvi, rifiuta) => {
+      const richiestaHttp = https.request({
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models/${GEMINI_MODELLO_IMMAGINI}:generateContent?key=${GEMINI_API_KEY}`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpoRichiesta) }
+      }, (r) => {
+        let corpo = '';
+        r.on('data', c => corpo += c);
+        r.on('end', () => { try { risolvi(JSON.parse(corpo)); } catch (e) { rifiuta(new Error('risposta illeggibile')); } });
+      });
+      richiestaHttp.on('error', rifiuta);
+      richiestaHttp.write(corpoRichiesta);
+      richiestaHttp.end();
+    });
+
+    if (risposta.error) {
+      return res.status(502).json({ error: risposta.error.message || 'Gemini ha rifiutato la richiesta' });
+    }
+
+    const parti = ((risposta.candidates || [])[0] || {}).content
+      ? risposta.candidates[0].content.parts || [] : [];
+    const immagineTornata = parti.filter(p => p.inlineData || p.inline_data)[0];
+    const commento = parti.filter(p => p.text).map(p => p.text).join(' ').trim();
+
+    if (!immagineTornata) {
+      return res.status(502).json({
+        error: commento || 'Il modello non ha restituito nessuna immagine. Prova a descrivere la modifica in modo piu\' semplice.'
+      });
+    }
+
+    const dato = immagineTornata.inlineData || immagineTornata.inline_data;
+    res.status(200).json({
+      immagine: dato.data,
+      tipoMime: dato.mimeType || dato.mime_type || 'image/png',
+      commento: commento
+    });
+  } catch (err) {
+    console.error('Ritocco foto non riuscito:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* La libreria che converte le foto HEIC dell'iPhone.
    Squarespace blocca gli script presi dai CDN pubblici, ma il CRM parla gia'
    con questo server: gliela serviamo da qui. La scarichiamo una volta sola
