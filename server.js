@@ -1948,7 +1948,13 @@ app.get('/api/pubblico/documento/:riferimento', async (req, res) => {
    gli si manda la foto e la richiesta a parole, torna la foto modificata.
    La chiave resta qui: la pagina non la vede mai.
 ========================================== */
-const GEMINI_MODELLO_IMMAGINI = process.env.GEMINI_MODELLO_IMMAGINI || 'gemini-3.1-flash-image';
+/* Non tutti i modelli che sanno fare immagini sono disponibili nel piano gratuito:
+   alcuni hanno quota zero, cioe' servono solo con la fatturazione attiva.
+   Li provo in fila, dal piu' probabilmente gratuito al piu' recente, e uso
+   il primo che risponde davvero. */
+const GEMINI_MODELLI_IMMAGINI = (process.env.GEMINI_MODELLO_IMMAGINI
+  ? [process.env.GEMINI_MODELLO_IMMAGINI]
+  : ['gemini-2.5-flash-image', 'gemini-2.0-flash-preview-image-generation', 'gemini-3.1-flash-image']);
 
 app.post('/api/foto-ritocco', async (req, res) => {
   try {
@@ -1982,10 +1988,10 @@ app.post('/api/foto-ritocco', async (req, res) => {
       generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
     });
 
-    const risposta = await new Promise((risolvi, rifiuta) => {
+    const chiediAModello = (modello) => new Promise((risolvi, rifiuta) => {
       const richiestaHttp = https.request({
         hostname: 'generativelanguage.googleapis.com',
-        path: `/v1beta/models/${GEMINI_MODELLO_IMMAGINI}:generateContent?key=${GEMINI_API_KEY}`,
+        path: `/v1beta/models/${modello}:generateContent?key=${GEMINI_API_KEY}`,
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpoRichiesta) }
       }, (r) => {
@@ -1998,26 +2004,43 @@ app.post('/api/foto-ritocco', async (req, res) => {
       richiestaHttp.end();
     });
 
-    if (risposta.error) {
-      return res.status(502).json({ error: risposta.error.message || 'Gemini ha rifiutato la richiesta' });
-    }
+    const tentativi = [];
+    for (const modello of GEMINI_MODELLI_IMMAGINI) {
+      let risposta;
+      try { risposta = await chiediAModello(modello); }
+      catch (e) { tentativi.push(`${modello}: ${e.message}`); continue; }
 
-    const parti = ((risposta.candidates || [])[0] || {}).content
-      ? risposta.candidates[0].content.parts || [] : [];
-    const immagineTornata = parti.filter(p => p.inlineData || p.inline_data)[0];
-    const commento = parti.filter(p => p.text).map(p => p.text).join(' ').trim();
+      if (risposta.error) {
+        tentativi.push(`${modello}: ${risposta.error.message || 'rifiutata'}`);
+        continue;                                  // quota zero o modello assente: provo il prossimo
+      }
 
-    if (!immagineTornata) {
-      return res.status(502).json({
-        error: commento || 'Il modello non ha restituito nessuna immagine. Prova a descrivere la modifica in modo piu\' semplice.'
+      const parti = ((risposta.candidates || [])[0] || {}).content
+        ? risposta.candidates[0].content.parts || [] : [];
+      const immagineTornata = parti.filter(p => p.inlineData || p.inline_data)[0];
+      const commento = parti.filter(p => p.text).map(p => p.text).join(' ').trim();
+
+      if (!immagineTornata) {
+        tentativi.push(`${modello}: nessuna immagine restituita`);
+        continue;
+      }
+
+      const dato = immagineTornata.inlineData || immagineTornata.inline_data;
+      return res.status(200).json({
+        immagine: dato.data,
+        tipoMime: dato.mimeType || dato.mime_type || 'image/png',
+        commento: commento,
+        modello: modello
       });
     }
 
-    const dato = immagineTornata.inlineData || immagineTornata.inline_data;
-    res.status(200).json({
-      immagine: dato.data,
-      tipoMime: dato.mimeType || dato.mime_type || 'image/png',
-      commento: commento
+    /* nessun modello ha funzionato: dico quali ho provato e perche' hanno detto no */
+    const quotaZero = tentativi.some(t => /quota|limit: 0|billing/i.test(t));
+    res.status(502).json({
+      error: quotaZero
+        ? 'Nessun modello di immagini disponibile con questa chiave nel piano gratuito. Serve attivare la fatturazione su Google AI Studio.'
+        : 'Nessun modello ha prodotto l\'immagine.',
+      dettaglio: tentativi
     });
   } catch (err) {
     console.error('Ritocco foto non riuscito:', err);
