@@ -1930,15 +1930,28 @@ app.get('/api/pubblico/comparabili-diagnosi', async (req, res) => {
 app.post('/api/pubblico/valutazione', async (req, res) => {
   try {
     const b = req.body || {};
-    if (!b.nomeCliente || !b.telefonoCliente) {
-      return res.status(400).json({ error: 'Servono almeno nome e telefono' });
+    /* Basta il nome: la pagina la usano i consulenti, e in sopralluogo il telefono
+       del proprietario puo' non essere ancora stato chiesto. */
+    if (!b.nomeCliente) {
+      return res.status(400).json({ error: 'Serve almeno il nome degli intestatari' });
     }
+
     const consentiti = ['nomeCliente', 'emailCliente', 'telefonoCliente', 'comune', 'zona', 'zonaOmi', 'via', 'civico',
       'motivo', 'mq', 'tipologia', 'locali', 'bagni', 'piano', 'ascensore', 'esposizione', 'stato',
       'annoCostruzione', 'rumore', 'partiComuni', 'prezzoBaseMq', 'notaZona',
-      'quotazioneOmiMin', 'quotazioneOmiMax', 'valoreConsigliato', 'valoreMinimo', 'valoreMassimo', 'valoreAlMq'];
-    const dati = { origine: 'Landing pubblica' };
+      'quotazioneOmiMin', 'quotazioneOmiMax', 'valoreConsigliato', 'valoreMinimo', 'valoreMassimo', 'valoreAlMq',
+      /* mancavano: senza questi la valutazione arrivava senza consulente, senza dati
+         catastali e senza i confronti scelti */
+      'consulente', 'identificativi', 'rendita', 'speseCondominiali', 'epoca', 'esposizione'];
+    const dati = { origine: 'Pagina valutazione' };
     consentiti.forEach(c => { if (b[c] !== undefined) dati[c] = String(b[c]); });
+    if (Array.isArray(b.comparabili)) dati.comparabili = b.comparabili;
+
+    /* Aggiornamento di una valutazione gia' esistente, quando si riapre un report */
+    if (b.id) {
+      const aggiornata = await Valutazione.findByIdAndUpdate(b.id, { $set: dati }, { new: true });
+      if (aggiornata) return res.status(200).json({ status: 'success', id: aggiornata._id, aggiornata: true });
+    }
 
     const salvata = await new Valutazione(dati).save();
     res.status(201).json({ status: 'success', id: salvata._id });
