@@ -1891,6 +1891,57 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* Un solo documento, per chi apre il link o inquadra il codice.
+   Restituisce quella valutazione e il contorno che serve a comporre il fascicolo:
+   nient'altro. Le altre valutazioni non escono da qui. */
+app.get('/api/pubblico/documento/:riferimento', async (req, res) => {
+  try {
+    const riferimento = String(req.params.riferimento || '').trim();
+    let valutazione = null;
+
+    if (/^[0-9a-fA-F]{24}$/.test(riferimento)) {
+      valutazione = await Valutazione.findById(riferimento);
+    }
+    /* si puo' arrivare anche col numero di pratica, che finisce con le ultime sei cifre */
+    if (!valutazione) {
+      const coda = riferimento.split('-').pop().toLowerCase();
+      if (coda.length >= 4) {
+        const candidate = await Valutazione.find({}, { _id: 1 }).sort({ createdAt: -1 }).limit(500);
+        const trovata = candidate.find(v => String(v._id).slice(-coda.length).toLowerCase() === coda);
+        if (trovata) valutazione = await Valutazione.findById(trovata._id);
+      }
+    }
+    if (!valutazione) return res.status(404).json({ error: 'Documento non trovato' });
+
+    const v = valutazione.toObject();
+    delete v.__v;
+
+    await seminaCoefficienti();
+    const coefficienti = await Coefficiente.find({}, { famiglia: 1, voce: 1, valore: 1, _id: 0 }).sort({ famiglia: 1, ordine: 1 });
+
+    /* solo la zona di questo immobile, non tutte */
+    const zona = v.comune && v.zonaOmi
+      ? await ZonaOmi.findOne({
+          comune: new RegExp('^' + String(v.comune).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
+          zona: new RegExp('^' + String(v.zonaOmi) + '$', 'i')
+        }, { comune: 1, zona: 1, descrizioneZona: 1, quotazioneMin: 1, quotazioneMax: 1, semestre: 1, _id: 0 })
+      : null;
+
+    const mercato = v.comune
+      ? await MercatoComune.find({ comune: new RegExp('^' + String(v.comune) + '$', 'i') },
+          { comune: 1, anno: 1, ntn: 1, fasce: 1, tagliaMercato: 1, _id: 0 }).sort({ anno: 1 })
+      : [];
+
+    const consulente = v.consulente
+      ? await Consulente.findOne({ utente: v.consulente },
+          { nomeCognome: 1, ruolo: 1, telefono: 1, mail: 1, fotoProfilo: 1, utente: 1, _id: 0 })
+      : null;
+
+    res.set('Cache-Control', 'public, max-age=300');
+    res.status(200).json({ valutazione: v, zona, coefficienti, mercato, consulente });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* Diagnosi rapida dell'archivio Concorrenza per un comune: serve a capire
    se il problema e' che non ci sono annunci o che i campi sono compilati altrove. */
 app.get('/api/pubblico/comparabili-diagnosi', async (req, res) => {
