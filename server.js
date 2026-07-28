@@ -1852,7 +1852,7 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
     const righe = await Concorrenza.find({
       comune: new RegExp('^' + comune.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
       statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] }
-    }, { via: 1, civico: 1, comune: 1, prezzo: 1, mq: 1, locali: 1, unita: 1, statoImmobile: 1, _id: 0 })
+    }, { via: 1, civico: 1, comune: 1, prezzo: 1, mq: 1, locali: 1, unita: 1, statoImmobile: 1, link: 1, _id: 0 })
       .sort({ updatedAt: -1 }).limit(60);
 
     const numero = (v) => Number(String(v == null ? '' : v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
@@ -1861,6 +1861,7 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
         const prezzo = numero(r.prezzo), mq = numero(r.mq);
         return { via: r.via || '', civico: r.civico || '', comune: r.comune || '',
                  prezzo: prezzo, mq: mq, locali: r.locali || '', tipo: r.unita || '',
+                 link: r.link || '',
                  alMq: (prezzo > 0 && mq > 0) ? Math.round(prezzo / mq) : 0 };
       })
       .filter(r => r.alMq > 0)
