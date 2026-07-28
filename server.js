@@ -1857,10 +1857,14 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
         { comune: new RegExp('^' + pulito + '$', 'i') },
         { paeseVia: new RegExp(pulito, 'i') }
       ],
-      statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] }
+      statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] },
+      /* niente "Prezzo su richiesta": senza una cifra non si confronta nulla.
+         Il filtro sta nella domanda al database, non dopo: cosi' non rischio di
+         pescare sessanta annunci senza prezzo e restituire una lista vuota. */
+      prezzo: { $regex: '[0-9]' }
     }, { via: 1, civico: 1, comune: 1, paeseVia: 1, prezzo: 1, unita: 1, piano: 1, bagni: 1, contesto: 1,
          link: 1, agenzia: 1, privato: 1, dataAnnuncio: 1, _id: 0 })
-      .sort({ updatedAt: -1 }).limit(60);
+      .sort({ updatedAt: -1 }).limit(300);
 
     const numero = (v) => Number(String(v == null ? '' : v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
     /* L'archivio Concorrenza non registra la superficie: restituisco quello che c'e'
@@ -1902,12 +1906,20 @@ app.get('/api/pubblico/comparabili-diagnosi', async (req, res) => {
     }) : 0;
     const esempio = await Concorrenza.findOne({}, { comune: 1, via: 1, civico: 1, paeseVia: 1, prezzo: 1, statoAnnuncio: 1, _id: 0 });
 
+    const conPrezzo = comune ? await Concorrenza.countDocuments({
+      $or: [{ comune: new RegExp('^' + pulito + '$', 'i') }, { paeseVia: new RegExp(pulito, 'i') }],
+      statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] },
+      prezzo: { $regex: '[0-9]' }
+    }) : 0;
+
     res.status(200).json({
       comuneCercato: comune,
       annunciTotali: tutti,
       conQuelComune: conComune,
       colComuneNellIndirizzo: nellIndirizzo,
       attiviTrovati: attivi,
+      conPrezzoNumerico: conPrezzo,
+      senzaPrezzo: attivi - conPrezzo,
       esempioDiRecord: esempio
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
