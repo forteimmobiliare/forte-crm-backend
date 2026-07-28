@@ -1942,6 +1942,50 @@ app.get('/api/pubblico/documento/:riferimento', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* La libreria che converte le foto HEIC dell'iPhone.
+   Squarespace blocca gli script presi dai CDN pubblici, ma il CRM parla gia'
+   con questo server: gliela serviamo da qui. La scarichiamo una volta sola
+   e la teniamo in memoria. */
+let LIBRERIA_HEIC = null;
+
+app.get('/api/pubblico/heic2any.js', async (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=604800');
+  res.set('Access-Control-Allow-Origin', '*');
+
+  if (LIBRERIA_HEIC) return res.status(200).send(LIBRERIA_HEIC);
+
+  const fonti = [
+    'https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js',
+    'https://unpkg.com/heic2any@0.0.4/dist/heic2any.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/heic2any/0.0.1/index.min.js'
+  ];
+
+  const scarica = (url) => new Promise((risolvi, rifiuta) => {
+    https.get(url, r => {
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        return scarica(r.headers.location).then(risolvi, rifiuta);
+      }
+      if (r.statusCode !== 200) { rifiuta(new Error('risposta ' + r.statusCode)); return; }
+      let corpo = '';
+      r.setEncoding('utf8');
+      r.on('data', c => corpo += c);
+      r.on('end', () => risolvi(corpo));
+    }).on('error', rifiuta);
+  });
+
+  for (const fonte of fonti) {
+    try {
+      const codice = await scarica(fonte);
+      if (codice && codice.length > 10000) {
+        LIBRERIA_HEIC = codice;
+        return res.status(200).send(codice);
+      }
+    } catch (e) { console.error('Libreria HEIC non scaricata da', fonte, e.message); }
+  }
+  res.status(502).send('// libreria non disponibile');
+});
+
 /* Diagnosi rapida dell'archivio Concorrenza per un comune: serve a capire
    se il problema e' che non ci sono annunci o che i campi sono compilati altrove. */
 app.get('/api/pubblico/comparabili-diagnosi', async (req, res) => {
