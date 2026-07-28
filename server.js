@@ -1852,21 +1852,27 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
     const righe = await Concorrenza.find({
       comune: new RegExp('^' + comune.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
       statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] }
-    }, { via: 1, civico: 1, comune: 1, prezzo: 1, mq: 1, locali: 1, unita: 1, statoImmobile: 1, link: 1, _id: 0 })
+    }, { via: 1, civico: 1, comune: 1, prezzo: 1, unita: 1, piano: 1, bagni: 1, contesto: 1, link: 1,
+         agenzia: 1, privato: 1, dataAnnuncio: 1, _id: 0 })
       .sort({ updatedAt: -1 }).limit(60);
 
     const numero = (v) => Number(String(v == null ? '' : v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
+    /* L'archivio Concorrenza non registra la superficie: restituisco quello che c'e'
+       e lascia che sia il consulente a scrivere i metri per gli annunci che sceglie.
+       Prima filtravo su un prezzo al metro che non poteva mai esistere, e il risultato
+       era sempre vuoto. */
     const utili = righe
       .map(r => {
-        const prezzo = numero(r.prezzo), mq = numero(r.mq);
+        const prezzo = numero(r.prezzo);
         return { via: r.via || '', civico: r.civico || '', comune: r.comune || '',
-                 prezzo: prezzo, mq: mq, locali: r.locali || '', tipo: r.unita || '',
-                 link: r.link || '',
-                 alMq: (prezzo > 0 && mq > 0) ? Math.round(prezzo / mq) : 0 };
+                 prezzo: prezzo, mq: 0, tipo: r.unita || '', piano: r.piano || '',
+                 bagni: r.bagni || '', contesto: r.contesto || '', link: r.link || '',
+                 fonte: (r.privato ? 'Privato' : (r.agenzia || 'Agenzia')),
+                 data: r.dataAnnuncio || '', alMq: 0 };
       })
-      .filter(r => r.alMq > 0)
-      .sort((a, b) => a.alMq - b.alMq)
-      .slice(0, 8);
+      .filter(r => r.prezzo > 0)
+      .sort((a, b) => a.prezzo - b.prezzo)
+      .slice(0, 12);
 
     res.set('Cache-Control', 'public, max-age=900');
     res.status(200).json(utili);
