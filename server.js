@@ -1849,11 +1849,17 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
     const comune = String(req.query.comune || '').trim();
     if (!comune) return res.status(400).json({ error: 'Comune mancante' });
 
+    /* Il comune puo' stare nel campo suo oppure, sui record piu' vecchi, dentro
+       l'indirizzo completo: cerco in tutti e due, altrimenti l'archivio sembra vuoto. */
+    const pulito = comune.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const righe = await Concorrenza.find({
-      comune: new RegExp('^' + comune.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i'),
+      $or: [
+        { comune: new RegExp('^' + pulito + '$', 'i') },
+        { paeseVia: new RegExp(pulito, 'i') }
+      ],
       statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] }
-    }, { via: 1, civico: 1, comune: 1, prezzo: 1, unita: 1, piano: 1, bagni: 1, contesto: 1, link: 1,
-         agenzia: 1, privato: 1, dataAnnuncio: 1, _id: 0 })
+    }, { via: 1, civico: 1, comune: 1, paeseVia: 1, prezzo: 1, unita: 1, piano: 1, bagni: 1, contesto: 1,
+         link: 1, agenzia: 1, privato: 1, dataAnnuncio: 1, _id: 0 })
       .sort({ updatedAt: -1 }).limit(60);
 
     const numero = (v) => Number(String(v == null ? '' : v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
@@ -1864,7 +1870,9 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
     const utili = righe
       .map(r => {
         const prezzo = numero(r.prezzo);
-        return { via: r.via || '', civico: r.civico || '', comune: r.comune || '',
+        /* se via e civico non sono compilati uso l'indirizzo completo del vecchio formato */
+        const indirizzo = [r.via, r.civico].filter(x => x && x !== 'N.D.').join(' ').trim();
+        return { via: indirizzo || (r.paeseVia || ''), civico: '', comune: r.comune || '',
                  prezzo: prezzo, mq: 0, tipo: r.unita || '', piano: r.piano || '',
                  bagni: r.bagni || '', contesto: r.contesto || '', link: r.link || '',
                  fonte: (r.privato ? 'Privato' : (r.agenzia || 'Agenzia')),
@@ -1876,6 +1884,32 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
 
     res.set('Cache-Control', 'public, max-age=900');
     res.status(200).json(utili);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Diagnosi rapida dell'archivio Concorrenza per un comune: serve a capire
+   se il problema e' che non ci sono annunci o che i campi sono compilati altrove. */
+app.get('/api/pubblico/comparabili-diagnosi', async (req, res) => {
+  try {
+    const comune = String(req.query.comune || '').trim();
+    const pulito = comune.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const tutti = await Concorrenza.countDocuments();
+    const conComune = comune ? await Concorrenza.countDocuments({ comune: new RegExp('^' + pulito + '$', 'i') }) : 0;
+    const nellIndirizzo = comune ? await Concorrenza.countDocuments({ paeseVia: new RegExp(pulito, 'i') }) : 0;
+    const attivi = comune ? await Concorrenza.countDocuments({
+      $or: [{ comune: new RegExp('^' + pulito + '$', 'i') }, { paeseVia: new RegExp(pulito, 'i') }],
+      statoAnnuncio: { $nin: ['Venduto', 'Ritirato'] }
+    }) : 0;
+    const esempio = await Concorrenza.findOne({}, { comune: 1, via: 1, civico: 1, paeseVia: 1, prezzo: 1, statoAnnuncio: 1, _id: 0 });
+
+    res.status(200).json({
+      comuneCercato: comune,
+      annunciTotali: tutti,
+      conQuelComune: conComune,
+      colComuneNellIndirizzo: nellIndirizzo,
+      attiviTrovati: attivi,
+      esempioDiRecord: esempio
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
