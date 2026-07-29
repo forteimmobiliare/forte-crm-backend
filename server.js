@@ -1943,29 +1943,186 @@ app.get('/api/pubblico/documento/:riferimento', async (req, res) => {
 });
 
 /* ==========================================
-   RITOCCO DELLE FOTO CON GEMINI
-   Stesso endpoint dell'assistente, ma con un modello che sa restituire immagini:
-   gli si manda la foto e la richiesta a parole, torna la foto modificata.
-   La chiave resta qui: la pagina non la vede mai.
+   RITOCCO DELLE FOTO — piu' fornitori, uno solo attivo
+   Il modello che modifica le immagini si sceglie con una variabile d'ambiente:
+   se domani ne esce uno migliore o piu' economico si cambia su Render senza
+   toccare il codice. Le chiavi restano tutte qui: la pagina non ne vede nessuna.
 ========================================== */
-/* Non tutti i modelli che sanno fare immagini sono disponibili nel piano gratuito:
-   alcuni hanno quota zero, cioe' servono solo con la fatturazione attiva.
-   Li provo in fila, dal piu' probabilmente gratuito al piu' recente, e uso
-   il primo che risponde davvero. */
+const FORNITORE_IMMAGINI = process.env.FORNITORE_IMMAGINI || 'gemini';
+
 const GEMINI_MODELLI_IMMAGINI = (process.env.GEMINI_MODELLO_IMMAGINI
   ? [process.env.GEMINI_MODELLO_IMMAGINI]
   : ['gemini-2.5-flash-image', 'gemini-2.0-flash-preview-image-generation', 'gemini-3.1-flash-image']);
 
+const FAL_API_KEY = process.env.FAL_API_KEY || '';
+const FAL_MODELLO = process.env.FAL_MODELLO || 'fal-ai/flux-pro/kontext';
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_MODELLO_IMMAGINI = process.env.OPENAI_MODELLO_IMMAGINI || 'gpt-image-1';
+
+/* Una richiesta HTTP che restituisce testo, con i reindirizzamenti seguiti */
+function chiediHttp(opzioni, corpo) {
+  return new Promise((risolvi, rifiuta) => {
+    const richiesta = https.request(opzioni, (r) => {
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        return chiediHttp(r.headers.location, null).then(risolvi, rifiuta);
+      }
+      let pezzi = [];
+      r.on('data', c => pezzi.push(c));
+      r.on('end', () => risolvi({ stato: r.statusCode, corpo: Buffer.concat(pezzi) }));
+    });
+    richiesta.on('error', rifiuta);
+    if (corpo) richiesta.write(corpo);
+    richiesta.end();
+  });
+}
+
+/* --- Gemini: stesso servizio dell'assistente, con un modello che sa disegnare --- */
+async function ritoccaConGemini(immagine, tipoMime, istruzioni) {
+  if (!GEMINI_API_KEY) throw new Error('Chiave Gemini non configurata sul server');
+
+  const corpo = JSON.stringify({
+    contents: [{ role: 'user', parts: [
+      { inline_data: { mime_type: tipoMime || 'image/jpeg', data: immagine } },
+      { text: istruzioni }
+    ] }],
+    generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
+  });
+
+  const tentativi = [];
+  for (const modello of GEMINI_MODELLI_IMMAGINI) {
+    let risposta;
+    try {
+      risposta = await chiediHttp({
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models/${modello}:generateContent?key=${GEMINI_API_KEY}`,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpo) }
+      }, corpo);
+    } catch (e) { tentativi.push(`${modello}: ${e.message}`); continue; }
+
+    let dati;
+    try { dati = JSON.parse(risposta.corpo.toString()); }
+    catch (e) { tentativi.push(`${modello}: risposta illeggibile`); continue; }
+
+    if (dati.error) { tentativi.push(`${modello}: ${dati.error.message || 'rifiutata'}`); continue; }
+
+    const parti = ((dati.candidates || [])[0] || {}).content ? dati.candidates[0].content.parts || [] : [];
+    const tornata = parti.filter(p => p.inlineData || p.inline_data)[0];
+    if (!tornata) { tentativi.push(`${modello}: nessuna immagine restituita`); continue; }
+
+    const dato = tornata.inlineData || tornata.inline_data;
+    return {
+      immagine: dato.data,
+      tipoMime: dato.mimeType || dato.mime_type || 'image/png',
+      commento: parti.filter(p => p.text).map(p => p.text).join(' ').trim(),
+      modello: modello
+    };
+  }
+
+  const quotaZero = tentativi.some(x => /quota|limit: 0|billing/i.test(x));
+  const errore = new Error(quotaZero
+    ? 'Nessun modello Gemini disponibile con questa chiave nel piano gratuito: serve attivare la fatturazione, oppure passare a un altro fornitore.'
+    : 'Nessun modello Gemini ha prodotto l\'immagine.');
+  errore.dettaglio = tentativi;
+  throw errore;
+}
+
+/* --- fal.ai: ospita FLUX Kontext, pensato apposta per modificare immagini --- */
+async function ritoccaConFal(immagine, tipoMime, istruzioni) {
+  if (!FAL_API_KEY) throw new Error('Chiave fal.ai non configurata sul server');
+
+  const corpo = JSON.stringify({
+    prompt: istruzioni,
+    image_url: `data:${tipoMime || 'image/jpeg'};base64,${immagine}`,
+    num_images: 1,
+    output_format: 'jpeg',
+    safety_tolerance: '2'
+  });
+
+  const risposta = await chiediHttp({
+    hostname: 'fal.run',
+    path: '/' + FAL_MODELLO,
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Key ' + FAL_API_KEY,
+      'Content-Length': Buffer.byteLength(corpo)
+    }
+  }, corpo);
+
+  const dati = JSON.parse(risposta.corpo.toString());
+  if (risposta.stato !== 200) throw new Error(dati.detail || dati.error || 'fal.ai ha risposto ' + risposta.stato);
+
+  const prima = (dati.images || [])[0];
+  if (!prima || !prima.url) throw new Error('fal.ai non ha restituito nessuna immagine');
+
+  /* torna un indirizzo: lo scarico io e lo passo come dato, cosi' il CRM
+     non deve parlare con un dominio in piu' */
+  const scaricata = await chiediHttp(prima.url, null);
+  return {
+    immagine: scaricata.corpo.toString('base64'),
+    tipoMime: prima.content_type || 'image/jpeg',
+    commento: '',
+    modello: FAL_MODELLO
+  };
+}
+
+/* --- OpenAI: gpt-image accetta istruzioni a parole su un'immagine caricata --- */
+async function ritoccaConOpenAi(immagine, tipoMime, istruzioni) {
+  if (!OPENAI_API_KEY) throw new Error('Chiave OpenAI non configurata sul server');
+
+  /* il formato richiede un invio a pezzi: lo compongo a mano per non
+     aggiungere librerie al progetto */
+  const confine = '----forte' + Date.now();
+  const pezzo = (nome, valore) =>
+    Buffer.from(`--${confine}\r\nContent-Disposition: form-data; name="${nome}"\r\n\r\n${valore}\r\n`);
+
+  const corpo = Buffer.concat([
+    pezzo('model', OPENAI_MODELLO_IMMAGINI),
+    pezzo('prompt', istruzioni),
+    pezzo('n', '1'),
+    pezzo('size', 'auto'),
+    Buffer.from(`--${confine}\r\nContent-Disposition: form-data; name="image"; filename="foto.jpg"\r\n` +
+                `Content-Type: ${tipoMime || 'image/jpeg'}\r\n\r\n`),
+    Buffer.from(immagine, 'base64'),
+    Buffer.from(`\r\n--${confine}--\r\n`)
+  ]);
+
+  const risposta = await chiediHttp({
+    hostname: 'api.openai.com',
+    path: '/v1/images/edits',
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + OPENAI_API_KEY,
+      'Content-Type': 'multipart/form-data; boundary=' + confine,
+      'Content-Length': corpo.length
+    }
+  }, corpo);
+
+  const dati = JSON.parse(risposta.corpo.toString());
+  if (risposta.stato !== 200) throw new Error((dati.error && dati.error.message) || 'OpenAI ha risposto ' + risposta.stato);
+
+  const prima = (dati.data || [])[0];
+  if (!prima || !prima.b64_json) throw new Error('OpenAI non ha restituito nessuna immagine');
+  return { immagine: prima.b64_json, tipoMime: 'image/png', commento: '', modello: OPENAI_MODELLO_IMMAGINI };
+}
+
+const FORNITORI_IMMAGINI = {
+  gemini: ritoccaConGemini,
+  fal: ritoccaConFal,
+  openai: ritoccaConOpenAi
+};
+
 app.post('/api/foto-ritocco', async (req, res) => {
   try {
-    if (!GEMINI_API_KEY) return res.status(503).json({ error: 'Chiave Gemini non configurata sul server' });
-
     const { immagine, tipoMime, richiesta } = req.body || {};
     if (!immagine) return res.status(400).json({ error: 'Immagine mancante' });
     if (!richiesta || !String(richiesta).trim()) return res.status(400).json({ error: 'Manca la descrizione della modifica' });
 
-    /* Le istruzioni di contorno: senza queste il modello reinventa la stanza,
-       e una foto che non corrisponde all'immobile non si puo' pubblicare. */
+    /* I vincoli di contorno valgono per qualunque fornitore: senza, il modello
+       reinventa la stanza, e una foto che non corrisponde all'immobile non si
+       puo' pubblicare. */
     const istruzioni = [
       String(richiesta).trim(),
       '',
@@ -1977,78 +2134,31 @@ app.post('/api/foto-ritocco', async (req, res) => {
       '- non aggiungere testo, filigrane o loghi'
     ].join('\n');
 
-    const corpoRichiesta = JSON.stringify({
-      contents: [{
-        role: 'user',
-        parts: [
-          { inline_data: { mime_type: tipoMime || 'image/jpeg', data: immagine } },
-          { text: istruzioni }
-        ]
-      }],
-      generationConfig: { responseModalities: ['TEXT', 'IMAGE'] }
-    });
+    const ritocca = FORNITORI_IMMAGINI[FORNITORE_IMMAGINI];
+    if (!ritocca) return res.status(500).json({ error: 'Fornitore immagini sconosciuto: ' + FORNITORE_IMMAGINI });
 
-    const chiediAModello = (modello) => new Promise((risolvi, rifiuta) => {
-      const richiestaHttp = https.request({
-        hostname: 'generativelanguage.googleapis.com',
-        path: `/v1beta/models/${modello}:generateContent?key=${GEMINI_API_KEY}`,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpoRichiesta) }
-      }, (r) => {
-        let corpo = '';
-        r.on('data', c => corpo += c);
-        r.on('end', () => { try { risolvi(JSON.parse(corpo)); } catch (e) { rifiuta(new Error('risposta illeggibile')); } });
-      });
-      richiestaHttp.on('error', rifiuta);
-      richiestaHttp.write(corpoRichiesta);
-      richiestaHttp.end();
-    });
-
-    const tentativi = [];
-    for (const modello of GEMINI_MODELLI_IMMAGINI) {
-      let risposta;
-      try { risposta = await chiediAModello(modello); }
-      catch (e) { tentativi.push(`${modello}: ${e.message}`); continue; }
-
-      if (risposta.error) {
-        tentativi.push(`${modello}: ${risposta.error.message || 'rifiutata'}`);
-        continue;                                  // quota zero o modello assente: provo il prossimo
-      }
-
-      const parti = ((risposta.candidates || [])[0] || {}).content
-        ? risposta.candidates[0].content.parts || [] : [];
-      const immagineTornata = parti.filter(p => p.inlineData || p.inline_data)[0];
-      const commento = parti.filter(p => p.text).map(p => p.text).join(' ').trim();
-
-      if (!immagineTornata) {
-        tentativi.push(`${modello}: nessuna immagine restituita`);
-        continue;
-      }
-
-      const dato = immagineTornata.inlineData || immagineTornata.inline_data;
-      return res.status(200).json({
-        immagine: dato.data,
-        tipoMime: dato.mimeType || dato.mime_type || 'image/png',
-        commento: commento,
-        modello: modello
-      });
-    }
-
-    /* nessun modello ha funzionato: dico quali ho provato e perche' hanno detto no */
-    const quotaZero = tentativi.some(t => /quota|limit: 0|billing/i.test(t));
-    res.status(502).json({
-      error: quotaZero
-        ? 'Nessun modello di immagini disponibile con questa chiave nel piano gratuito. Serve attivare la fatturazione su Google AI Studio.'
-        : 'Nessun modello ha prodotto l\'immagine.',
-      dettaglio: tentativi
-    });
+    const esito = await ritocca(immagine, tipoMime, istruzioni);
+    res.status(200).json(Object.assign({ fornitore: FORNITORE_IMMAGINI }, esito));
   } catch (err) {
     console.error('Ritocco foto non riuscito:', err);
-    res.status(500).json({ error: err.message });
+    res.status(502).json({ error: err.message, dettaglio: err.dettaglio || [], fornitore: FORNITORE_IMMAGINI });
   }
 });
 
-/* La libreria che converte le foto HEIC dell'iPhone.
+/* Dice quale fornitore e' attivo e quali chiavi risultano configurate */
+app.get('/api/foto-ritocco/stato', (req, res) => {
+  res.status(200).json({
+    attivo: FORNITORE_IMMAGINI,
+    disponibili: {
+      gemini: !!GEMINI_API_KEY,
+      fal: !!FAL_API_KEY,
+      openai: !!OPENAI_API_KEY
+    },
+    modelli: { gemini: GEMINI_MODELLI_IMMAGINI, fal: FAL_MODELLO, openai: OPENAI_MODELLO_IMMAGINI }
+  });
+});
+
+/* La libreria che converte le foto HEIC dell'iPhone./* La libreria che converte le foto HEIC dell'iPhone.
    Squarespace blocca gli script presi dai CDN pubblici, ma il CRM parla gia'
    con questo server: gliela serviamo da qui. La scarichiamo una volta sola
    e la teniamo in memoria. */
@@ -2217,6 +2327,27 @@ app.delete('/api/zone-omi/semestre/:semestre', async (req, res) => {
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 registraRotteScheda('cdv', Cdv, 'Cdv');
+
+/* ==========================================
+   OPEN HOUSE
+   Una giornata di porte aperte su un immobile in incarico. Ogni riga e'
+   una giornata: quando si tiene, su quale immobile, e le attivita' di
+   promozione che vanno fatte prima perche' ci venga gente.
+========================================== */
+const OpenHouseSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  data: { type: String, default: '' },              // aaaa-mm-gg
+  orario: { type: String, default: '' },            // es. "15:00 - 18:00"
+  incaricoUfficio: { type: String, default: '' },   // idElemento dell'incarico
+  immobile: { type: String, default: '' },          // descrizione leggibile, per l'elenco
+  stato: { type: String, default: 'Da programmare' },
+  visitatori: { type: String, default: '' },
+  proposteRaccolte: { type: String, default: '' },
+  note: { type: String, default: '' },
+  attivita: { type: Object, default: {} }           // quali promozioni sono state fatte
+}, { timestamps: true });
+const OpenHouse = mongoose.model('OpenHouse', OpenHouseSchema);
+registraRotteScheda('open-house', OpenHouse, 'Open House');
 
 app.get('/api/professionisti', async (req, res) => {
   try { res.status(200).json(await Professionista.find({}).sort({ createdAt: -1 })); }
