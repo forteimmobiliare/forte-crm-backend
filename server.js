@@ -806,6 +806,14 @@ const IncaricoSchema = new mongoose.Schema({
   fotoAllegati: { type: [String], default: [] },
   reportUsername: { type: String, default: '' },
   reportPassword: { type: String, default: '' },
+  /* le tappe della gestione: quando ogni cosa e' stata fatta.
+     Servono al report per raccontare il lavoro svolto, non solo il risultato. */
+  dataDocumenti: { type: String, default: '' },      // documenti recuperati dal proprietario
+  dataAccessoAtti: { type: String, default: '' },    // accesso agli atti in Comune
+  dataPubblicazione: { type: String, default: '' },  // messa online sui portali
+  visualizzazioni: { type: String, default: '' },    // quante volte l'annuncio e' stato visto
+  contattiRicevuti: { type: String, default: '' },   // richieste arrivate dai portali
+  dataAggiornamentoViste: { type: String, default: '' },
   gestioneDocumenti: { type: mongoose.Schema.Types.Mixed, default: {} } // venditori, provenienza, mutuo, accesso atti, foto, pubblicazione
 }, { timestamps: true });
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
@@ -2348,6 +2356,27 @@ const OpenHouseSchema = new mongoose.Schema({
 }, { timestamps: true });
 const OpenHouse = mongoose.model('OpenHouse', OpenHouseSchema);
 registraRotteScheda('open-house', OpenHouse, 'Open House');
+
+/* ==========================================
+   GESTIONE IMMOBILI
+   Ogni volta che si genera il report di un incarico resta una riga qui:
+   quando e' stato fatto, con che numeri, da chi. E' il registro di quello
+   che il proprietario ha ricevuto, e serve a non doverselo ricordare.
+========================================== */
+const GestioneImmobileSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  data: { type: String, default: '' },
+  incaricoUfficio: { type: String, default: '' },
+  immobile: { type: String, default: '' },
+  tipo: { type: String, default: 'Report' },
+  destinatario: { type: String, default: '' },
+  note: { type: String, default: '' },
+  /* i numeri com'erano quel giorno: il report si rigenera aggiornato,
+     ma qui resta la fotografia di allora */
+  numeri: { type: Object, default: {} }
+}, { timestamps: true });
+const GestioneImmobile = mongoose.model('GestioneImmobile', GestioneImmobileSchema);
+registraRotteScheda('gestione-immobili', GestioneImmobile, 'Gestione Immobili');
 
 app.get('/api/professionisti', async (req, res) => {
   try { res.status(200).json(await Professionista.find({}).sort({ createdAt: -1 })); }
