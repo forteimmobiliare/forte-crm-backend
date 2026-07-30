@@ -2481,6 +2481,19 @@ const SOCIAL_CONFIG = {
 
 const INDIRIZZO_SERVER = process.env.INDIRIZZO_SERVER || 'https://forte-crm-backend.onrender.com';
 
+/* I collegamenti a meta' strada: quando ci sono piu' pagine fra cui scegliere,
+   il permesso e' gia' stato ottenuto e va tenuto da parte per un minuto.
+   Non si puo' rifare lo scambio: il codice che Meta manda vale una volta sola,
+   ed e' proprio questo che rompeva la scelta della pagina. */
+const COLLEGAMENTI_IN_CORSO = new Map();
+
+setInterval(() => {
+  const limite = Date.now() - 10 * 60 * 1000;
+  for (const [chiave, dato] of COLLEGAMENTI_IN_CORSO) {
+    if (dato.quando < limite) COLLEGAMENTI_IN_CORSO.delete(chiave);
+  }
+}, 5 * 60 * 1000);
+
 /* Dice quali canali sono collegati e quali credenziali mancano. E' la prima
    cosa che la finestra delle connessioni chiede. */
 app.get('/api/social/stato', async (req, res) => {
@@ -2503,7 +2516,12 @@ app.get('/api/social/stato', async (req, res) => {
       };
     });
 
-    res.status(200).json({ canali, indirizzoRitorno: INDIRIZZO_SERVER + '/api/social/ritorno' });
+    res.status(200).json({
+      versione: 'scelta-pagina-2',       // cambia a ogni modifica: dice quale codice gira davvero
+      canali,
+      indirizzoRitorno: INDIRIZZO_SERVER + '/api/social/ritorno',
+      collegamentiInCorso: COLLEGAMENTI_IN_CORSO.size
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2534,19 +2552,6 @@ app.get('/api/social/avvia/:canale', (req, res) => {
 
 /* Secondo passo: la piattaforma rimanda qui con un codice, che si scambia
    con il permesso vero e proprio. */
-/* I collegamenti a meta' strada: quando ci sono piu' pagine fra cui scegliere,
-   il permesso e' gia' stato ottenuto e va tenuto da parte per un minuto.
-   Non si puo' rifare lo scambio: il codice che Meta manda vale una volta sola,
-   ed e' proprio questo che rompeva la scelta della pagina. */
-const COLLEGAMENTI_IN_CORSO = new Map();
-
-setInterval(() => {
-  const limite = Date.now() - 10 * 60 * 1000;
-  for (const [chiave, dato] of COLLEGAMENTI_IN_CORSO) {
-    if (dato.quando < limite) COLLEGAMENTI_IN_CORSO.delete(chiave);
-  }
-}, 5 * 60 * 1000);
-
 app.get('/api/social/ritorno', async (req, res) => {
   const chiudi = (messaggio, colore) => res.status(200).send(
     `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
@@ -2603,8 +2608,19 @@ app.get('/api/social/ritorno', async (req, res) => {
         client_id: c.id, client_secret: c.segreto,
         redirect_uri: INDIRIZZO_SERVER + '/api/social/ritorno', code: codice
       });
+      console.log('[social] scambio del codice per', chiave, '- stato', stato);
       const risposta = await chiamataJson('graph.facebook.com', '/v21.0/oauth/access_token?' + parametri.toString(), 'GET');
-      if (risposta.error) return chiudi('Meta ha rifiutato: ' + risposta.error.message, '#f8a4b0');
+      if (risposta.error) {
+        const messaggio = risposta.error.message || 'errore sconosciuto';
+        /* questo errore ha una causa sola: la stessa pagina e' stata caricata due
+           volte, di solito ricaricando la finestra del collegamento */
+        const riusato = /has been used|already been used/i.test(messaggio);
+        return chiudi(riusato
+          ? '<strong>Questo collegamento era già stato usato.</strong><br>' +
+            'Chiudi questa finestra e premi di nuovo Collega dal CRM: ' +
+            'non ricaricare questa pagina, ogni tentativo vale una volta sola.'
+          : 'Meta ha rifiutato: ' + messaggio, '#f8a4b0');
+      }
       token = risposta.access_token;
 
       /* Le pagine che amministri. Se sono piu' di una NON scelgo io: mostro
