@@ -386,6 +386,10 @@ const VisioniSchema = new mongoose.Schema({
   dataVisione: { type: String, default: '' },   // giorno dell'appuntamento, spostabile dal calendario
   oraVisione: { type: String, default: '' },
   bancaDatiOrigineId: { type: String, default: '' }, // evita duplicati quando l'item torna "Fissato"
+  /* Lo stato dell'appuntamento: fissato non vuol dire fatto, e sapere quanti
+     ne saltano e' un dato che serve. */
+  statoAdv: { type: String, default: 'Fissato' },     // Fissato | Fatto | Saltato
+  statoProposta: { type: String, default: 'No' },     // Fatta Proposta | No
   propostaCreata: { type: Boolean, default: false }
 }, { timestamps: true });
 const Visioni = mongoose.model('Visioni', VisioniSchema);
