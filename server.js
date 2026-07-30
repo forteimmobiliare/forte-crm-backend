@@ -808,6 +808,13 @@ const IncaricoSchema = new mongoose.Schema({
   reportPassword: { type: String, default: '' },
   /* le tappe della gestione: quando ogni cosa e' stata fatta.
      Servono al report per raccontare il lavoro svolto, non solo il risultato. */
+  /* I dati catastali dell'immobile, scritti una volta e riusati ovunque:
+     preliminare, valutazione, fascicolo. Sono piu' unita' perche' un immobile
+     ne ha spesso due o tre — abitazione, box, cantina. */
+  datiCatastali: { type: Array, default: [] },
+  provenienza: { type: String, default: '' },        // da chi e come e' arrivato al venditore
+  confini: { type: String, default: '' },
+  conformitaNote: { type: String, default: '' },
   dataDocumenti: { type: String, default: '' },      // documenti recuperati dal proprietario
   dataAccessoAtti: { type: String, default: '' },    // accesso agli atti in Comune
   dataPubblicazione: { type: String, default: '' },  // messa online sui portali
