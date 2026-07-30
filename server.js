@@ -2487,10 +2487,21 @@ const INDIRIZZO_SERVER = process.env.INDIRIZZO_SERVER || 'https://forte-crm-back
    ed e' proprio questo che rompeva la scelta della pagina. */
 const COLLEGAMENTI_IN_CORSO = new Map();
 
+/* Il codice che Meta manda vale una volta sola: se la stessa pagina di ritorno
+   viene caricata due volte — succede, e non sempre per colpa di chi la usa:
+   ci sono browser che precaricano gli indirizzi e servizi che li controllano —
+   il secondo tentativo fallirebbe. Quindi il risultato dello scambio lo tengo
+   da parte per qualche minuto: se il codice torna, riuso quello che ho gia'
+   invece di richiedere a Meta. */
+const CODICI_SCAMBIATI = new Map();
+
 setInterval(() => {
   const limite = Date.now() - 10 * 60 * 1000;
   for (const [chiave, dato] of COLLEGAMENTI_IN_CORSO) {
     if (dato.quando < limite) COLLEGAMENTI_IN_CORSO.delete(chiave);
+  }
+  for (const [chiave, dato] of CODICI_SCAMBIATI) {
+    if (dato.quando < limite) CODICI_SCAMBIATI.delete(chiave);
   }
 }, 5 * 60 * 1000);
 
@@ -2517,7 +2528,7 @@ app.get('/api/social/stato', async (req, res) => {
     });
 
     res.status(200).json({
-      versione: 'scelta-pagina-2',       // cambia a ogni modifica: dice quale codice gira davvero
+      versione: 'codice-riusabile-3',    // cambia a ogni modifica: dice quale codice gira davvero
       canali,
       indirizzoRitorno: INDIRIZZO_SERVER + '/api/social/ritorno',
       collegamentiInCorso: COLLEGAMENTI_IN_CORSO.size
@@ -2608,8 +2619,18 @@ app.get('/api/social/ritorno', async (req, res) => {
         client_id: c.id, client_secret: c.segreto,
         redirect_uri: INDIRIZZO_SERVER + '/api/social/ritorno', code: codice
       });
-      console.log('[social] scambio del codice per', chiave, '- stato', stato);
-      const risposta = await chiamataJson('graph.facebook.com', '/v21.0/oauth/access_token?' + parametri.toString(), 'GET');
+      /* gia' scambiato poco fa? riuso, invece di bruciare il codice una seconda volta */
+      const gia = CODICI_SCAMBIATI.get(codice);
+      let risposta;
+      if (gia) {
+        console.log('[social] codice gia\' scambiato: riuso il permesso');
+        risposta = { access_token: gia.token };
+      } else {
+        console.log('[social] scambio del codice per', chiave, '- stato', stato);
+        risposta = await chiamataJson('graph.facebook.com', '/v21.0/oauth/access_token?' + parametri.toString(), 'GET');
+        if (risposta.access_token) CODICI_SCAMBIATI.set(codice, { token: risposta.access_token, quando: Date.now() });
+      }
+
       if (risposta.error) {
         const messaggio = risposta.error.message || 'errore sconosciuto';
         /* questo errore ha una causa sola: la stessa pagina e' stata caricata due
