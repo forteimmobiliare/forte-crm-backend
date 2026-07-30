@@ -2397,6 +2397,343 @@ const GestioneImmobileSchema = new mongoose.Schema({
 const GestioneImmobile = mongoose.model('GestioneImmobile', GestioneImmobileSchema);
 registraRotteScheda('gestione-immobili', GestioneImmobile, 'Gestione Immobili');
 
+/* ==========================================
+   CROSS POSTING
+   Un contenuto scritto una volta e pubblicato su piu' canali. Qui vive il
+   contenuto e lo stato su ciascun canale: cosa e' stato pubblicato, quando,
+   e cosa e' ancora da fare.
+========================================== */
+const PostSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  titolo: { type: String, default: '' },
+  tipo: { type: String, default: 'Post' },          // Post | Reel | Storia
+  testo: { type: String, default: '' },
+  hashtag: { type: String, default: '' },
+  link: { type: String, default: '' },              // annuncio o pagina a cui rimanda
+  media: { type: Array, default: [] },              // indirizzi delle immagini o del video
+  incaricoUfficio: { type: String, default: '' },
+  dataProgrammata: { type: String, default: '' },
+  stato: { type: String, default: 'Bozza' },        // Bozza | Programmato | Pubblicato
+  /* per ogni canale: se e' previsto, se e' stato fatto, quando, e il testo
+     adattato a quel canale se e' stato modificato a mano */
+  canali: { type: Object, default: {} },
+  note: { type: String, default: '' }
+}, { timestamps: true });
+const Post = mongoose.model('Post', PostSchema);
+registraRotteScheda('cross-posting', Post, 'Cross Posting');
+
+/* ==========================================
+   CONNESSIONI AI SOCIAL
+   Il collegamento a ciascuna piattaforma: il consenso si da' una volta e
+   il permesso resta qui, sul server. La pagina non vede mai i token.
+========================================== */
+const ConnessioneSocialSchema = new mongoose.Schema({
+  canale: { type: String, required: true },        // facebook | instagram | linkedin | x | tiktok
+  nomeAccount: { type: String, default: '' },      // come si chiama la pagina o il profilo collegato
+  idAccount: { type: String, default: '' },        // id della pagina Facebook o dell'account Instagram
+  token: { type: String, default: '' },
+  scadenza: { type: String, default: '' },
+  collegatoDa: { type: String, default: '' },
+  attiva: { type: Boolean, default: true }
+}, { timestamps: true });
+const ConnessioneSocial = mongoose.model('ConnessioneSocial', ConnessioneSocialSchema);
+
+/* Le credenziali dell'applicazione: si registrano una volta presso ogni
+   piattaforma e si mettono qui come variabili d'ambiente. Senza queste,
+   il collegamento non puo' nemmeno cominciare. */
+const SOCIAL_CONFIG = {
+  facebook: {
+    nome: 'Facebook',
+    id: process.env.META_APP_ID || '',
+    segreto: process.env.META_APP_SECRET || '',
+    autorizza: 'https://www.facebook.com/v21.0/dialog/oauth',
+    permessi: 'pages_show_list,pages_manage_posts,pages_read_engagement,business_management'
+  },
+  instagram: {
+    nome: 'Instagram',
+    id: process.env.META_APP_ID || '',
+    segreto: process.env.META_APP_SECRET || '',
+    autorizza: 'https://www.facebook.com/v21.0/dialog/oauth',
+    permessi: 'instagram_basic,instagram_content_publish,pages_show_list,business_management'
+  },
+  linkedin: {
+    nome: 'LinkedIn',
+    id: process.env.LINKEDIN_CLIENT_ID || '',
+    segreto: process.env.LINKEDIN_CLIENT_SECRET || '',
+    autorizza: 'https://www.linkedin.com/oauth/v2/authorization',
+    permessi: 'w_member_social,r_liteprofile'
+  },
+  x: {
+    nome: 'X',
+    id: process.env.X_CLIENT_ID || '',
+    segreto: process.env.X_CLIENT_SECRET || '',
+    autorizza: 'https://twitter.com/i/oauth2/authorize',
+    permessi: 'tweet.read tweet.write users.read offline.access'
+  },
+  tiktok: {
+    nome: 'TikTok',
+    id: process.env.TIKTOK_CLIENT_KEY || '',
+    segreto: process.env.TIKTOK_CLIENT_SECRET || '',
+    autorizza: 'https://www.tiktok.com/v2/auth/authorize/',
+    permessi: 'video.publish,video.upload'
+  }
+};
+
+const INDIRIZZO_SERVER = process.env.INDIRIZZO_SERVER || 'https://forte-crm-backend.onrender.com';
+
+/* Dice quali canali sono collegati e quali credenziali mancano. E' la prima
+   cosa che la finestra delle connessioni chiede. */
+app.get('/api/social/stato', async (req, res) => {
+  try {
+    const collegate = await ConnessioneSocial.find({ attiva: true },
+      { canale: 1, nomeAccount: 1, idAccount: 1, scadenza: 1, collegatoDa: 1, updatedAt: 1, _id: 0 });
+
+    const canali = Object.keys(SOCIAL_CONFIG).map(chiave => {
+      const c = SOCIAL_CONFIG[chiave];
+      const connessione = collegate.find(x => x.canale === chiave);
+      return {
+        canale: chiave,
+        nome: c.nome,
+        configurato: !!(c.id && c.segreto),      // l'applicazione e' registrata?
+        collegato: !!connessione,
+        nomeAccount: connessione ? connessione.nomeAccount : '',
+        scadenza: connessione ? connessione.scadenza : '',
+        collegatoDa: connessione ? connessione.collegatoDa : ''
+      };
+    });
+
+    res.status(200).json({ canali, indirizzoRitorno: INDIRIZZO_SERVER + '/api/social/ritorno' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Primo passo: si manda l'utente alla pagina di consenso della piattaforma */
+app.get('/api/social/avvia/:canale', (req, res) => {
+  const chiave = String(req.params.canale || '');
+  const c = SOCIAL_CONFIG[chiave];
+  if (!c) return res.status(404).send('Canale sconosciuto');
+  if (!c.id || !c.segreto) {
+    return res.status(503).send(
+      `<p style="font-family:sans-serif;padding:30px">L'applicazione ${c.nome} non e' ancora registrata.<br><br>` +
+      `Servono le credenziali nelle variabili d'ambiente del server.</p>`);
+  }
+
+  const ritorno = INDIRIZZO_SERVER + '/api/social/ritorno';
+  const stato = chiave + ':' + Math.random().toString(36).slice(2);
+
+  const parametri = new URLSearchParams({
+    client_id: c.id,
+    redirect_uri: ritorno,
+    state: stato,
+    response_type: 'code',
+    scope: c.permessi
+  });
+
+  res.redirect(c.autorizza + '?' + parametri.toString());
+});
+
+/* Secondo passo: la piattaforma rimanda qui con un codice, che si scambia
+   con il permesso vero e proprio. */
+app.get('/api/social/ritorno', async (req, res) => {
+  const chiudi = (messaggio, colore) => res.status(200).send(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+     <body style="font-family:system-ui,sans-serif;background:#0B3B4A;color:#fff;display:flex;
+                  align-items:center;justify-content:center;height:100vh;margin:0;text-align:center">
+       <div><div style="font-size:15px;font-weight:800;letter-spacing:1.4px;margin-bottom:14px">
+         FORTE <span style="color:#C6A777">IMMOBILIARE</span></div>
+       <div style="color:${colore};font-size:14px;line-height:1.7;max-width:44ch">${messaggio}</div>
+       <div style="color:#8fb3c0;font-size:12px;margin-top:18px">Puoi chiudere questa finestra.</div></div>
+       <script>setTimeout(function(){ try{ window.opener && window.opener.postMessage('social-aggiornato','*'); window.close(); }catch(e){} }, 2200);<\/script>
+     </body></html>`);
+
+  try {
+    const codice = req.query.code;
+    const stato = String(req.query.state || '');
+    const chiave = stato.split(':')[0];
+    const c = SOCIAL_CONFIG[chiave];
+
+    if (req.query.error) return chiudi('Collegamento annullato: ' + (req.query.error_description || req.query.error), '#f8a4b0');
+    if (!codice || !c) return chiudi('Risposta incompleta dalla piattaforma.', '#f8a4b0');
+
+    /* lo scambio del codice con il token: per Meta e' una chiamata sola */
+    let token = '', nomeAccount = '', idAccount = '', scadenza = '';
+
+    if (chiave === 'facebook' || chiave === 'instagram') {
+      const parametri = new URLSearchParams({
+        client_id: c.id, client_secret: c.segreto,
+        redirect_uri: INDIRIZZO_SERVER + '/api/social/ritorno', code: codice
+      });
+      const risposta = await chiamataJson('graph.facebook.com', '/v21.0/oauth/access_token?' + parametri.toString(), 'GET');
+      if (risposta.error) return chiudi('Meta ha rifiutato: ' + risposta.error.message, '#f8a4b0');
+      token = risposta.access_token;
+
+      /* trovo la pagina collegata: e' su quella che si pubblica */
+      const pagine = await chiamataJson('graph.facebook.com',
+        '/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=' + token, 'GET');
+      const prima = (pagine.data || [])[0];
+      if (!prima) return chiudi('Nessuna pagina Facebook trovata su questo account.', '#e2b13c');
+
+      if (chiave === 'facebook') {
+        token = prima.access_token; idAccount = prima.id; nomeAccount = prima.name;
+      } else {
+        if (!prima.instagram_business_account) {
+          return chiudi('La pagina "' + prima.name + '" non ha un account Instagram professionale collegato.', '#e2b13c');
+        }
+        token = prima.access_token;
+        idAccount = prima.instagram_business_account.id;
+        nomeAccount = prima.name + ' (Instagram)';
+      }
+    } else {
+      return chiudi('Il collegamento a ' + c.nome + ' non e\' ancora attivo su questo server.', '#e2b13c');
+    }
+
+    await ConnessioneSocial.findOneAndUpdate({ canale: chiave },
+      { canale: chiave, token, idAccount, nomeAccount, scadenza, attiva: true },
+      { upsert: true, new: true });
+
+    chiudi('<strong>' + c.nome + ' collegato.</strong><br>Account: ' + nomeAccount, '#8fe5b0');
+  } catch (err) {
+    console.error('Collegamento social non riuscito:', err);
+    chiudi('Qualcosa e\' andato storto: ' + err.message, '#f8a4b0');
+  }
+});
+
+app.delete('/api/social/:canale', async (req, res) => {
+  try {
+    await ConnessioneSocial.deleteOne({ canale: String(req.params.canale || '') });
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   PUBBLICAZIONE
+   Su Facebook si pubblica in una chiamata. Su Instagram in due: prima si
+   prepara il contenitore con l'immagine, poi lo si pubblica. E' il modo in
+   cui funziona la loro interfaccia, non una complicazione nostra.
+========================================== */
+async function pubblicaSuCanale(canale, testo, immagine) {
+  const connessione = await ConnessioneSocial.findOne({ canale, attiva: true });
+  if (!connessione || !connessione.token) throw new Error(SOCIAL_CONFIG[canale].nome + ' non e\' collegato');
+
+  if (canale === 'facebook') {
+    const parametri = new URLSearchParams({ access_token: connessione.token });
+    if (immagine) { parametri.set('url', immagine); parametri.set('caption', testo); }
+    else { parametri.set('message', testo); }
+    const percorso = `/v21.0/${connessione.idAccount}/${immagine ? 'photos' : 'feed'}?` + parametri.toString();
+    const esito = await chiamataJson('graph.facebook.com', percorso, 'POST');
+    if (esito.error) throw new Error(esito.error.message);
+    return { id: esito.id || esito.post_id };
+  }
+
+  if (canale === 'instagram') {
+    if (!immagine) throw new Error('Instagram vuole un\'immagine: senza, non si pubblica');
+    const creazione = await chiamataJson('graph.facebook.com',
+      `/v21.0/${connessione.idAccount}/media?` + new URLSearchParams({
+        image_url: immagine, caption: testo, access_token: connessione.token
+      }).toString(), 'POST');
+    if (creazione.error) throw new Error(creazione.error.message);
+
+    const pubblicazione = await chiamataJson('graph.facebook.com',
+      `/v21.0/${connessione.idAccount}/media_publish?` + new URLSearchParams({
+        creation_id: creazione.id, access_token: connessione.token
+      }).toString(), 'POST');
+    if (pubblicazione.error) throw new Error(pubblicazione.error.message);
+    return { id: pubblicazione.id };
+  }
+
+  throw new Error('La pubblicazione su ' + SOCIAL_CONFIG[canale].nome + ' non e\' ancora attiva');
+}
+
+app.post('/api/social/pubblica', async (req, res) => {
+  try {
+    const { idPost, canale, testo, immagine } = req.body || {};
+    if (!canale) return res.status(400).json({ error: 'Manca il canale' });
+    if (!testo && !immagine) return res.status(400).json({ error: 'Non c\'e\' niente da pubblicare' });
+
+    const esito = await pubblicaSuCanale(canale, testo || '', immagine || '');
+
+    /* segno il risultato sul contenuto, cosi' l'elenco lo sa */
+    if (idPost) {
+      const post = await Post.findById(idPost);
+      if (post) {
+        const canali = post.canali || {};
+        canali[canale] = Object.assign({}, canali[canale], {
+          previsto: true, pubblicato: true,
+          quando: new Date().toISOString().slice(0, 10), idPubblicazione: esito.id
+        });
+        post.canali = canali;
+        post.markModified('canali');
+        await post.save();
+      }
+    }
+    res.status(200).json({ status: 'success', id: esito.id });
+  } catch (err) {
+    console.error('Pubblicazione non riuscita:', err);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+/* ==========================================
+   PROGRAMMAZIONE
+   Ogni cinque minuti guarda se c'e' qualcosa da pubblicare. Su Render il
+   servizio gratuito si addormenta quando nessuno lo usa: la programmazione
+   funziona solo se il piano lo tiene sveglio.
+========================================== */
+async function eseguiProgrammazioni() {
+  try {
+    const adesso = new Date().toISOString().slice(0, 16);       // aaaa-mm-ggThh:mm
+    const daFare = await Post.find({
+      stato: 'Programmato',
+      dataProgrammata: { $ne: '', $lte: adesso }
+    }).limit(20);
+
+    for (const post of daFare) {
+      const canali = post.canali || {};
+      let tuttiFatti = true;
+
+      for (const canale of Object.keys(canali)) {
+        const suo = canali[canale] || {};
+        if (!suo.previsto || suo.pubblicato) continue;
+        try {
+          const esito = await pubblicaSuCanale(canale, suo.testo || post.testo, (post.media || [])[0] || '');
+          canali[canale] = Object.assign({}, suo, {
+            pubblicato: true, quando: new Date().toISOString().slice(0, 10), idPubblicazione: esito.id
+          });
+        } catch (e) {
+          console.error('Programmazione fallita su', canale, e.message);
+          canali[canale] = Object.assign({}, suo, { errore: e.message });
+          tuttiFatti = false;
+        }
+      }
+
+      post.canali = canali;
+      post.markModified('canali');
+      if (tuttiFatti) post.stato = 'Pubblicato';
+      await post.save();
+    }
+  } catch (err) { console.error('Giro delle programmazioni non riuscito:', err); }
+}
+
+setInterval(eseguiProgrammazioni, 5 * 60 * 1000);
+
+/* Una chiamata che restituisce JSON, per non ripetere le stesse dieci righe */
+function chiamataJson(dominio, percorso, metodo, corpo) {
+  return new Promise((risolvi, rifiuta) => {
+    const opzioni = { hostname: dominio, path: percorso, method: metodo || 'GET', headers: {} };
+    if (corpo) {
+      opzioni.headers['Content-Type'] = 'application/json';
+      opzioni.headers['Content-Length'] = Buffer.byteLength(corpo);
+    }
+    const r = https.request(opzioni, (risposta) => {
+      let pezzi = '';
+      risposta.on('data', c => pezzi += c);
+      risposta.on('end', () => { try { risolvi(JSON.parse(pezzi || '{}')); } catch (e) { rifiuta(new Error('risposta illeggibile')); } });
+    });
+    r.on('error', rifiuta);
+    if (corpo) r.write(corpo);
+    r.end();
+  });
+}
+
 app.get('/api/professionisti', async (req, res) => {
   try { res.status(200).json(await Professionista.find({}).sort({ createdAt: -1 })); }
   catch (err) { res.status(500).json({ error: err.message }); }
