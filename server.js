@@ -2497,6 +2497,7 @@ app.get('/api/social/stato', async (req, res) => {
         configurato: !!(c.id && c.segreto),      // l'applicazione e' registrata?
         collegato: !!connessione,
         nomeAccount: connessione ? connessione.nomeAccount : '',
+        idAccount: connessione ? connessione.idAccount : '',
         scadenza: connessione ? connessione.scadenza : '',
         collegatoDa: connessione ? connessione.collegatoDa : ''
       };
@@ -2566,21 +2567,64 @@ app.get('/api/social/ritorno', async (req, res) => {
       if (risposta.error) return chiudi('Meta ha rifiutato: ' + risposta.error.message, '#f8a4b0');
       token = risposta.access_token;
 
-      /* trovo la pagina collegata: e' su quella che si pubblica */
+      /* Le pagine che amministri. Se sono piu' di una NON scelgo io: mostro
+         l'elenco e decidi tu. Prendere la prima e' il modo migliore per
+         pubblicare sulla pagina sbagliata senza accorgersene. */
       const pagine = await chiamataJson('graph.facebook.com',
         '/v21.0/me/accounts?fields=id,name,access_token,instagram_business_account&access_token=' + token, 'GET');
-      const prima = (pagine.data || [])[0];
-      if (!prima) return chiudi('Nessuna pagina Facebook trovata su questo account.', '#e2b13c');
+      const elenco = pagine.data || [];
+      if (!elenco.length) return chiudi('Nessuna pagina Facebook trovata su questo account.', '#e2b13c');
+
+      const sceltaId = req.query.pagina;
+      let scelta = sceltaId ? elenco.find(p => p.id === sceltaId) : null;
+
+      if (!scelta) {
+        if (elenco.length === 1) {
+          scelta = elenco[0];
+        } else {
+          /* piu' pagine: chiedo quale, ripassando lo stesso codice */
+          const bottoni = elenco.map(p => {
+            const adatta = (chiave === 'instagram') ? !!p.instagram_business_account : true;
+            const indirizzo = INDIRIZZO_SERVER + '/api/social/ritorno?code=' + encodeURIComponent(codice) +
+                              '&state=' + encodeURIComponent(stato) + '&pagina=' + encodeURIComponent(p.id);
+            return `<a href="${adatta ? indirizzo : '#'}" ${adatta ? '' : 'onclick="return false"'}
+              style="display:flex;align-items:center;gap:12px;background:${adatta ? '#12323f' : '#0e2029'};
+                     border:1px solid ${adatta ? '#C6A777' : '#1d3b47'};border-radius:9px;padding:14px 16px;
+                     margin-bottom:9px;text-decoration:none;color:#fff;${adatta ? '' : 'opacity:.5;cursor:not-allowed;'}">
+              <div style="flex:1;text-align:left">
+                <div style="font-weight:700;font-size:14px">${p.name}</div>
+                <div style="color:#8fb3c0;font-size:11.5px;margin-top:3px">
+                  ${chiave === 'instagram'
+                    ? (p.instagram_business_account ? 'ha un account Instagram professionale collegato'
+                                                    : 'nessun Instagram professionale collegato')
+                    : 'pagina Facebook'}</div>
+              </div>
+              ${adatta ? '<span style="color:#C6A777;font-size:18px">&rsaquo;</span>' : ''}
+            </a>`;
+          }).join('');
+
+          return res.status(200).send(
+            `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
+             <body style="font-family:system-ui,sans-serif;background:#0B3B4A;color:#fff;margin:0;padding:34px 26px">
+               <div style="max-width:460px;margin:0 auto">
+                 <div style="font-size:15px;font-weight:800;letter-spacing:1.4px;margin-bottom:6px;text-align:center">
+                   FORTE <span style="color:#C6A777">IMMOBILIARE</span></div>
+                 <div style="color:#8fb3c0;font-size:13.5px;line-height:1.6;text-align:center;margin-bottom:22px">
+                   Amministri più di una pagina.<br>Su quale vuoi pubblicare?</div>
+                 ${bottoni}
+               </div></body></html>`);
+        }
+      }
 
       if (chiave === 'facebook') {
-        token = prima.access_token; idAccount = prima.id; nomeAccount = prima.name;
+        token = scelta.access_token; idAccount = scelta.id; nomeAccount = scelta.name;
       } else {
-        if (!prima.instagram_business_account) {
-          return chiudi('La pagina "' + prima.name + '" non ha un account Instagram professionale collegato.', '#e2b13c');
+        if (!scelta.instagram_business_account) {
+          return chiudi('La pagina "' + scelta.name + '" non ha un account Instagram professionale collegato.', '#e2b13c');
         }
-        token = prima.access_token;
-        idAccount = prima.instagram_business_account.id;
-        nomeAccount = prima.name + ' (Instagram)';
+        token = scelta.access_token;
+        idAccount = scelta.instagram_business_account.id;
+        nomeAccount = scelta.name + ' (Instagram)';
       }
     } else {
       return chiudi('Il collegamento a ' + c.nome + ' non e\' ancora attivo su questo server.', '#e2b13c');
