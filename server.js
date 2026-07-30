@@ -2534,6 +2534,19 @@ app.get('/api/social/avvia/:canale', (req, res) => {
 
 /* Secondo passo: la piattaforma rimanda qui con un codice, che si scambia
    con il permesso vero e proprio. */
+/* I collegamenti a meta' strada: quando ci sono piu' pagine fra cui scegliere,
+   il permesso e' gia' stato ottenuto e va tenuto da parte per un minuto.
+   Non si puo' rifare lo scambio: il codice che Meta manda vale una volta sola,
+   ed e' proprio questo che rompeva la scelta della pagina. */
+const COLLEGAMENTI_IN_CORSO = new Map();
+
+setInterval(() => {
+  const limite = Date.now() - 10 * 60 * 1000;
+  for (const [chiave, dato] of COLLEGAMENTI_IN_CORSO) {
+    if (dato.quando < limite) COLLEGAMENTI_IN_CORSO.delete(chiave);
+  }
+}, 5 * 60 * 1000);
+
 app.get('/api/social/ritorno', async (req, res) => {
   const chiudi = (messaggio, colore) => res.status(200).send(
     `<!DOCTYPE html><html><head><meta charset="utf-8"></head>
@@ -2553,7 +2566,34 @@ app.get('/api/social/ritorno', async (req, res) => {
     const c = SOCIAL_CONFIG[chiave];
 
     if (req.query.error) return chiudi('Collegamento annullato: ' + (req.query.error_description || req.query.error), '#f8a4b0');
-    if (!codice || !c) return chiudi('Risposta incompleta dalla piattaforma.', '#f8a4b0');
+    if (!c) return chiudi('Risposta incompleta dalla piattaforma.', '#f8a4b0');
+
+    /* Secondo passaggio: si sta tornando dalla scelta della pagina. Il permesso
+       ce l'ho gia' da prima — il codice di Meta e' gia' stato speso e non si
+       puo' riusare. */
+    const inCorso = COLLEGAMENTI_IN_CORSO.get(stato);
+    if (req.query.pagina && inCorso) {
+      const scelta = (inCorso.pagine || []).find(p => p.id === req.query.pagina);
+      if (!scelta) return chiudi('Pagina non piu\' disponibile: riprova il collegamento.', '#e2b13c');
+      COLLEGAMENTI_IN_CORSO.delete(stato);
+
+      let tokenScelto = scelta.access_token, idScelto = scelta.id, nomeScelto = scelta.name;
+      if (chiave === 'instagram') {
+        if (!scelta.instagram_business_account) {
+          return chiudi('La pagina "' + scelta.name + '" non ha un account Instagram professionale collegato.', '#e2b13c');
+        }
+        idScelto = scelta.instagram_business_account.id;
+        nomeScelto = scelta.name + ' (Instagram)';
+      }
+
+      await ConnessioneSocial.findOneAndUpdate({ canale: chiave },
+        { canale: chiave, token: tokenScelto, idAccount: idScelto, nomeAccount: nomeScelto, attiva: true },
+        { upsert: true, new: true });
+
+      return chiudi('<strong>' + c.nome + ' collegato.</strong><br>Account: ' + nomeScelto, '#8fe5b0');
+    }
+
+    if (!codice) return chiudi('Risposta incompleta dalla piattaforma.', '#f8a4b0');
 
     /* lo scambio del codice con il token: per Meta e' una chiamata sola */
     let token = '', nomeAccount = '', idAccount = '', scadenza = '';
@@ -2582,11 +2622,13 @@ app.get('/api/social/ritorno', async (req, res) => {
         if (elenco.length === 1) {
           scelta = elenco[0];
         } else {
-          /* piu' pagine: chiedo quale, ripassando lo stesso codice */
+          /* piu' pagine: tengo da parte il permesso e chiedo quale */
+          COLLEGAMENTI_IN_CORSO.set(stato, { pagine: elenco, quando: Date.now() });
+
           const bottoni = elenco.map(p => {
             const adatta = (chiave === 'instagram') ? !!p.instagram_business_account : true;
-            const indirizzo = INDIRIZZO_SERVER + '/api/social/ritorno?code=' + encodeURIComponent(codice) +
-                              '&state=' + encodeURIComponent(stato) + '&pagina=' + encodeURIComponent(p.id);
+            const indirizzo = INDIRIZZO_SERVER + '/api/social/ritorno?state=' + encodeURIComponent(stato) +
+                              '&pagina=' + encodeURIComponent(p.id);
             return `<a href="${adatta ? indirizzo : '#'}" ${adatta ? '' : 'onclick="return false"'}
               style="display:flex;align-items:center;gap:12px;background:${adatta ? '#12323f' : '#0e2029'};
                      border:1px solid ${adatta ? '#C6A777' : '#1d3b47'};border-radius:9px;padding:14px 16px;
