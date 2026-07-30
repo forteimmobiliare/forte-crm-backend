@@ -2423,6 +2423,25 @@ const Post = mongoose.model('Post', PostSchema);
 registraRotteScheda('cross-posting', Post, 'Cross Posting');
 
 /* ==========================================
+   LETTERE
+   Il testo si scrive una volta con i segnaposto, e viene stampato tante volte
+   quanti sono i destinatari, ognuna con i suoi dati.
+========================================== */
+const LetteraSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  titolo: { type: String, default: '' },
+  oggetto: { type: String, default: '' },
+  testo: { type: String, default: '' },
+  fonte: { type: String, default: 'proprietari' },   // da quale archivio prendere i destinatari
+  conCarta: { type: Boolean, default: true },        // carta intestata dell'agenzia
+  conFirma: { type: Boolean, default: true },
+  ultimaStampa: { type: String, default: '' },
+  quanteStampate: { type: String, default: '' }
+}, { timestamps: true });
+const Lettera = mongoose.model('Lettera', LetteraSchema);
+registraRotteScheda('lettere', Lettera, 'Lettere');
+
+/* ==========================================
    CONNESSIONI AI SOCIAL
    Il collegamento a ciascuna piattaforma: il consenso si da' una volta e
    il permesso resta qui, sul server. La pagina non vede mai i token.
