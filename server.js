@@ -2191,6 +2191,41 @@ app.get('/api/foto-ritocco/stato', (req, res) => {
    e la teniamo in memoria. */
 let LIBRERIA_HEIC = null;
 
+/* La libreria dei codici da inquadrare, servita da qui: i CDN pubblici su
+   Squarespace sono bloccati, questo dominio no. */
+let LIBRERIA_QR = null;
+
+app.get('/api/pubblico/qrcode.js', async (req, res) => {
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.set('Cache-Control', 'public, max-age=604800');
+  res.set('Access-Control-Allow-Origin', '*');
+  if (LIBRERIA_QR) return res.status(200).send(LIBRERIA_QR);
+
+  const fonti = [
+    'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js',
+    'https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js'
+  ];
+  const scarica = (url) => new Promise((risolvi, rifiuta) => {
+    https.get(url, r => {
+      if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+        return scarica(r.headers.location).then(risolvi, rifiuta);
+      }
+      if (r.statusCode !== 200) { rifiuta(new Error('risposta ' + r.statusCode)); return; }
+      let corpo = ''; r.setEncoding('utf8');
+      r.on('data', c => corpo += c);
+      r.on('end', () => risolvi(corpo));
+    }).on('error', rifiuta);
+  });
+
+  for (const fonte of fonti) {
+    try {
+      const codice = await scarica(fonte);
+      if (codice && codice.length > 3000) { LIBRERIA_QR = codice; return res.status(200).send(codice); }
+    } catch (e) { console.error('Libreria QR non scaricata da', fonte, e.message); }
+  }
+  res.status(502).send('// libreria non disponibile');
+});
+
 app.get('/api/pubblico/heic2any.js', async (req, res) => {
   res.set('Content-Type', 'application/javascript; charset=utf-8');
   res.set('Cache-Control', 'public, max-age=604800');
@@ -2440,6 +2475,28 @@ const LetteraSchema = new mongoose.Schema({
 }, { timestamps: true });
 const Lettera = mongoose.model('Lettera', LetteraSchema);
 registraRotteScheda('lettere', Lettera, 'Lettere');
+
+/* ==========================================
+   VOLANTINI
+   Un A5 per l'acquisizione, con il codice da inquadrare che porta al
+   consulente giusto. Il volantino e' lo stesso, la firma cambia.
+========================================== */
+const VolantinoSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  titolo: { type: String, default: '' },
+  layout: { type: String, default: 'classico' },
+  occhiello: { type: String, default: '' },
+  testata: { type: String, default: '' },
+  testo: { type: String, default: '' },
+  richiamo: { type: String, default: '' },        // la frase che invita ad agire
+  tipoCodice: { type: String, default: 'whatsapp' },
+  linkCodice: { type: String, default: '' },
+  immagine: { type: String, default: '' },
+  zona: { type: String, default: '' },
+  quantiStampati: { type: String, default: '' }
+}, { timestamps: true });
+const Volantino = mongoose.model('Volantino', VolantinoSchema);
+registraRotteScheda('volantini', Volantino, 'Volantini');
 
 /* ==========================================
    CONNESSIONI AI SOCIAL
