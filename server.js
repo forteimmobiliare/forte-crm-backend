@@ -2518,6 +2518,65 @@ const Planimetria = mongoose.model('Planimetria', PlanimetriaSchema);
 registraRotteScheda('planimetrie', Planimetria, 'Planimetrie');
 
 /* ==========================================
+   AGENDA DA TELEFONO
+   Gli appuntamenti del consulente, letti da tutte le schede e restituiti
+   gia' pronti. Serve alla pagina che si mette sulla schermata iniziale:
+   il telefono non deve scaricarsi tutto il CRM per far vedere tre visite.
+========================================== */
+app.get('/api/pubblico/agenda/:utente', async (req, res) => {
+  try {
+    const utente = String(req.params.utente || '');
+    const da = String(req.query.da || new Date().toISOString().slice(0, 10));
+    const a = String(req.query.a || '');
+
+    const nelPeriodo = (data) => {
+      if (!data) return false;
+      const d = String(data).slice(0, 10);
+      return d >= da && (!a || d <= a);
+    };
+    const suo = (r) => !utente || r.consulente === utente;
+
+    const eventi = [];
+
+    const visioni = await Visioni.find({}).limit(600);
+    visioni.filter(v => suo(v) && nelPeriodo(v.dataVisione)).forEach(v => {
+      eventi.push({ tipo: 'visione', data: String(v.dataVisione).slice(0, 10),
+        orario: v.orario || '', titolo: 'Visita ' + (v.nomeCognome || ''),
+        dettaglio: v.incaricoUfficio || '', telefono: v.telefono || '' });
+    });
+
+    const openHouse = await OpenHouse.find({}).limit(200);
+    openHouse.filter(o => suo(o) && nelPeriodo(o.data) && o.stato !== 'Annullato').forEach(o => {
+      eventi.push({ tipo: 'openhouse', data: String(o.data).slice(0, 10),
+        orario: o.orario || '', titolo: 'Open House', dettaglio: o.immobile || '' });
+    });
+
+    const cdv = await Cdv.find({}).limit(400);
+    cdv.filter(c => suo(c)).forEach(c => {
+      if (nelPeriodo(c.dataCdv1)) eventi.push({ tipo: 'cdv', data: String(c.dataCdv1).slice(0, 10),
+        orario: c.orarioCdv1 || '', titolo: 'Cdv 1 ' + (c.nomeProprietario || c.nome || ''),
+        dettaglio: c.indirizzo || c.comune || '', telefono: c.telefono || '' });
+      if (nelPeriodo(c.dataCdv2)) eventi.push({ tipo: 'cdv', data: String(c.dataCdv2).slice(0, 10),
+        orario: c.orarioCdv2 || '', titolo: 'Cdv 2 ' + (c.nomeProprietario || c.nome || ''),
+        dettaglio: c.indirizzo || c.comune || '', telefono: c.telefono || '' });
+    });
+
+    const incarichi = await Incarico.find({}).limit(400);
+    incarichi.filter(i => suo(i) && nelPeriodo(i.dataScadenza)).forEach(i => {
+      eventi.push({ tipo: 'scadenza', data: String(i.dataScadenza).slice(0, 10), orario: '',
+        titolo: 'Scade incarico', dettaglio: i.nome || i.idElemento || '' });
+    });
+
+    eventi.sort((x, y) => (x.data + (x.orario || '')).localeCompare(y.data + (y.orario || '')));
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({ utente, da, eventi });
+  } catch (err) {
+    console.error('Agenda non letta:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================
    CONNESSIONI AI SOCIAL
    Il collegamento a ciascuna piattaforma: il consenso si da' una volta e
    il permesso resta qui, sul server. La pagina non vede mai i token.
