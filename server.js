@@ -2523,6 +2523,109 @@ registraRotteScheda('planimetrie', Planimetria, 'Planimetrie');
    gia' pronti. Serve alla pagina che si mette sulla schermata iniziale:
    il telefono non deve scaricarsi tutto il CRM per far vedere tre visite.
 ========================================== */
+/* ==========================================
+   I KPI PER IL TELEFONO
+   Il conto lo fa il server: al telefono non si scaricano cinque archivi
+   interi per far vedere due percentuali.
+========================================== */
+app.get('/api/pubblico/kpi/:utente', async (req, res) => {
+  try {
+    const utente = String(req.params.utente || '');
+    const oby = await ObyBudget.findOne({ consulente: utente });
+
+    if (!oby || !oby.guadagnoNettoDesiderato) {
+      return res.status(200).json({ utente, configurato: false });
+    }
+
+    const da = oby.dataInizioMonitoraggio || '';
+    const a = oby.dataFineMonitoraggio || '';
+    const nelPeriodo = (d) => {
+      if (!d) return false;
+      const s = String(d).slice(0, 10);
+      return (!da || s >= da) && (!a || s <= a);
+    };
+    const suo = (r) => r.consulente === utente;
+
+    /* i conteggi reali, presi dagli archivi */
+    const [proposte, incarichi, visioni, cdv, opportunity, concorrenza] = await Promise.all([
+      Proposta.find({}).limit(900), Incarico.find({}).limit(900),
+      Visioni.find({}).limit(900), Cdv.find({}).limit(900),
+      Opportunity.find({}).limit(900), Concorrenza.find({}).limit(900)
+    ]);
+
+    const mie = (elenco, campo) => elenco.filter(r => suo(r) && nelPeriodo(r[campo] || r.createdAt));
+
+    const k = oby.kpi || {};
+    const provv = oby.percentualeProvvigione || 40;
+    const lordo = Math.round((oby.guadagnoNettoDesiderato / provv) * 100);
+
+    /* il funnel a ritroso, come nel CRM */
+    const vendite = Math.ceil(lordo / (k.provvigioneMediaVendita || 6000));
+    const immobili = Math.ceil(vendite / (k.transazioniPerImmobile || 1.2));
+    const proposteAttese = Math.ceil(vendite / ((k.chiusuraProposte || 60) / 100));
+    const visioniAttese = Math.ceil(proposteAttese * (k.visioniPerProposta || 8));
+    const incarichiAttesi = Math.ceil(immobili / ((k.venditaSuAcquisito || 70) / 100));
+    const cdv2Attese = Math.ceil(incarichiAttesi / ((k.cdv2SuIncarico || 50) / 100));
+    const cdv1Attese = Math.ceil(cdv2Attese / ((k.cdv1SuCdv2 || 60) / 100));
+    const opportunityAttese = Math.ceil(cdv1Attese * (k.opportunityPerCdv || 30));
+
+    const mieProposte = mie(proposte, 'dataPresaProposta');
+    const mieCdv = mie(cdv, 'createdAt');
+
+    const funnel = [
+      { titolo: 'Opportunity', obiettivo: opportunityAttese, attuale: mie(opportunity, 'createdAt').length },
+      { titolo: 'Cdv 1', obiettivo: cdv1Attese, attuale: mieCdv.filter(c => c.cdv1 === 'Sì').length },
+      { titolo: 'Cdv 2', obiettivo: cdv2Attese, attuale: mieCdv.filter(c => c.cdv2 === 'Sì').length },
+      { titolo: 'Incarichi', obiettivo: incarichiAttesi, attuale: mie(incarichi, 'dataIncarico').length },
+      { titolo: 'Visite', obiettivo: visioniAttese, attuale: mie(visioni, 'dataVisione').length },
+      { titolo: 'Proposte', obiettivo: proposteAttese, attuale: mieProposte.length },
+      { titolo: 'Vendite', obiettivo: vendite,
+        attuale: mieProposte.filter(p => String(p.statoAvanzamento || '').indexOf('Rogito') >= 0).length }
+    ];
+
+    /* i canali di acquisizione, con le quote fisse */
+    const quote = { concorrenza: 10, vdp: 20, vdpNoNum: 20, necrologio: 20, zona: 20, leadUfficio: 10 };
+    const canaleDi = (fonte) => {
+      const f = String(fonte || '').toLowerCase();
+      if (f.indexOf('concorrenza') !== -1) return 'concorrenza';
+      if (f.indexOf('privatello') !== -1 || f.indexOf('vdp') !== -1) return 'vdp';
+      if (f.indexOf('necrolog') !== -1) return 'necrologio';
+      if (f.indexOf('zona') !== -1 || f.indexOf('fresca') !== -1) return 'zona';
+      if (f.indexOf('ufficio') !== -1 || f.indexOf('lead') !== -1) return 'leadUfficio';
+      return '';
+    };
+
+    const raccolte = {};
+    Object.keys(quote).forEach(c => { raccolte[c] = 0; });
+    mie(opportunity, 'createdAt').forEach(o => {
+      const c = canaleDi(o.fonte);
+      if (c) raccolte[c]++;
+    });
+    mie(concorrenza, 'createdAt').forEach(r => {
+      if (r.statoSviluppo !== 'Opportunity') return;
+      if (r.agenzia) raccolte.concorrenza++;
+      else if (/no.*num/i.test(String(r.privato))) raccolte.vdpNoNum++;
+      else if (r.privato) raccolte.vdp++;
+    });
+
+    const canali = Object.keys(quote).map(c => ({
+      chiave: c, quota: quote[c],
+      obiettivo: Math.round(opportunityAttese * quote[c] / 100),
+      raccolte: raccolte[c]
+    }));
+
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({
+      utente, configurato: true, da, a,
+      netto: oby.guadagnoNettoDesiderato, lordo, provvigione: provv,
+      funnel, canali, opportunityAttese
+    });
+  } catch (err) {
+    console.error('KPI non calcolati:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* Le attivita' del consulente per il telefono. Le date qui sono scritte
    come giorno/mese/anno, quindi vanno convertite per confrontarle. */
 app.get('/api/pubblico/attivita/:utente', async (req, res) => {
