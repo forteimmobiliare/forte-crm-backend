@@ -2523,6 +2523,50 @@ registraRotteScheda('planimetrie', Planimetria, 'Planimetrie');
    gia' pronti. Serve alla pagina che si mette sulla schermata iniziale:
    il telefono non deve scaricarsi tutto il CRM per far vedere tre visite.
 ========================================== */
+/* Le attivita' del consulente per il telefono. Le date qui sono scritte
+   come giorno/mese/anno, quindi vanno convertite per confrontarle. */
+app.get('/api/pubblico/attivita/:utente', async (req, res) => {
+  try {
+    const utente = String(req.params.utente || '');
+    const tutte = await Todo.find({}).limit(800);
+
+    const inIso = (d) => {
+      const s = String(d || '').trim();
+      if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+      const p = s.split('/');
+      return p.length === 3 ? `${p[2]}-${p[1].padStart(2, '0')}-${p[0].padStart(2, '0')}` : '';
+    };
+
+    const attivita = tutte
+      .filter(x => !utente || x.consulente === utente)
+      .map(x => ({
+        id: String(x._id), data: inIso(x.data), testo: x.task || '',
+        stato: x.stato || 'Attivo', note: x.note || '',
+        origine: x.origine || '', collegamento: x.collegamento || ''
+      }))
+      .filter(x => x.data)
+      .sort((a, b) => a.data.localeCompare(b.data));
+
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({ utente, attivita });
+  } catch (err) {
+    console.error('Attività non lette:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Spuntare un'attivita' dal telefono */
+app.put('/api/pubblico/attivita/:id', async (req, res) => {
+  try {
+    const stato = String((req.body || {}).stato || '');
+    if (['Attivo', 'Completato'].indexOf(stato) === -1) {
+      return res.status(400).json({ error: 'Stato non valido' });
+    }
+    await Todo.findByIdAndUpdate(req.params.id, { stato });
+    res.status(200).json({ status: 'success', stato });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/api/pubblico/agenda/:utente', async (req, res) => {
   try {
     const utente = String(req.params.utente || '');
