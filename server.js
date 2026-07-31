@@ -2499,6 +2499,25 @@ const Volantino = mongoose.model('Volantino', VolantinoSchema);
 registraRotteScheda('volantini', Volantino, 'Volantini');
 
 /* ==========================================
+   PLANIMETRIE
+   La pianta disegnata a mano libera sulla griglia: muri come linee, stanze
+   come aree chiuse, porte e finestre appoggiate ai muri. Le misure sono in
+   centimetri, cosi' non ci sono decimali che si perdono per strada.
+========================================== */
+const PlanimetriaSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  titolo: { type: String, default: '' },
+  incaricoUfficio: { type: String, default: '' },
+  muri: { type: Array, default: [] },        // [{x1,y1,x2,y2}] in centimetri
+  stanze: { type: Array, default: [] },      // [{nome, punti:[[x,y],...]}]
+  aperture: { type: Array, default: [] },    // [{tipo,muro,posizione,larghezza}]
+  conQuote: { type: Boolean, default: true },
+  note: { type: String, default: '' }
+}, { timestamps: true });
+const Planimetria = mongoose.model('Planimetria', PlanimetriaSchema);
+registraRotteScheda('planimetrie', Planimetria, 'Planimetrie');
+
+/* ==========================================
    CONNESSIONI AI SOCIAL
    Il collegamento a ciascuna piattaforma: il consenso si da' una volta e
    il permesso resta qui, sul server. La pagina non vede mai i token.
