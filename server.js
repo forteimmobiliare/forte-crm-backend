@@ -197,6 +197,10 @@ const StradarioSchema = new mongoose.Schema({
           citofoni: [
             {
               nome: { type: String, default: '' },
+              /* a quale unita' da visura corrisponde, e cosa e' successo
+                 quando si e' provato a contattarlo */
+              unitaVisura: { type: String, default: '' },   // il sub collegato
+              attivita: { type: Array, default: [] },       // [{tipo, quando, nota}]
               statoProprietario: { type: String, default: '' },
               piano: { type: String, default: '' },
               vani: { type: String, default: '' },
@@ -2770,7 +2774,10 @@ app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
         })),
         citofoni: (c.citofoni || []).map((x, k) => ({
           indice: k, nome: x.nome || '', piano: x.piano || '',
-          stato: x.statoProprietario || '', vani: x.vani || '', mq: x.mq || ''
+          stato: x.statoProprietario || '', vani: x.vani || '', mq: x.mq || '',
+          unitaVisura: x.unitaVisura || '',
+          attivita: (x.attivita || []).slice().sort((a, b) =>
+            String(b.quando || '').localeCompare(String(a.quando || '')))
         }))
       })).sort((a, b) => String(a.numero).localeCompare(String(b.numero), 'it', { numeric: true }))
     });
@@ -2806,6 +2813,60 @@ app.put('/api/pubblico/censimento/:comune/contesto', async (req, res) => {
     console.error('Contesto non salvato:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+/* Cosa e' successo su un citofono: chi ha aperto, chi non ha risposto, a chi
+   si e' scritto. E' la memoria del lavoro fatto: senza, si ricitofona a chi
+   ha gia' detto di no. */
+app.post('/api/pubblico/censimento/:comune/attivita', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    const uguale = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, b.via));
+    const civico = via && (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    const citofono = civico && (civico.citofoni || [])[b.indice];
+    if (!citofono) return res.status(404).json({ error: 'Citofono non trovato' });
+
+    if (!citofono.attivita) citofono.attivita = [];
+    citofono.attivita.push({
+      tipo: b.tipo || '',
+      quando: b.quando || new Date().toISOString(),
+      nota: b.nota || '',
+      consulente: b.consulente || ''
+    });
+
+    s.markModified('vie');
+    await s.save();
+    res.status(200).json({ status: 'success', quante: citofono.attivita.length });
+  } catch (err) {
+    console.error('Attività non salvata:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Togliere un'attivita' segnata per sbaglio */
+app.delete('/api/pubblico/censimento/:comune/attivita', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    const uguale = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, b.via));
+    const civico = via && (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    const citofono = civico && (civico.citofoni || [])[b.indice];
+    if (!citofono) return res.status(404).json({ error: 'Citofono non trovato' });
+
+    /* le attivita' si tolgono per quando sono state segnate: l'ordine a
+       schermo e' per data, quindi la posizione non coincide */
+    citofono.attivita = (citofono.attivita || []).filter(a => String(a.quando) !== String(b.quando));
+    s.markModified('vie');
+    await s.save();
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /* Le unita' da visura: sub, piano, e chi le possiede. Si scrivono dal campo
@@ -2925,9 +2986,11 @@ app.put('/api/pubblico/censimento/:comune/citofono', async (req, res) => {
       if (b.nome !== undefined) c.nome = b.nome;
       if (b.piano !== undefined) c.piano = b.piano;
       if (b.stato !== undefined) c.statoProprietario = b.stato;
+      if (b.unitaVisura !== undefined) c.unitaVisura = b.unitaVisura;
     } else {
       civico.citofoni.push({
-        nome: b.nome || '', piano: b.piano || '', statoProprietario: b.stato || ''
+        nome: b.nome || '', piano: b.piano || '', statoProprietario: b.stato || '',
+        unitaVisura: b.unitaVisura || '', attivita: []
       });
     }
 
