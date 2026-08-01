@@ -2627,6 +2627,107 @@ app.get('/api/pubblico/kpi/:utente', async (req, res) => {
 });
 
 /* ==========================================
+   CENSIMENTO DA TELEFONO
+   Sul campo si citofona e si annota. La pagina scarica una via per volta:
+   caricare un comune intero su una connessione mobile non ha senso.
+========================================== */
+app.get('/api/pubblico/censimento/comuni', async (req, res) => {
+  try {
+    const comuni = await Stradario.find({}, { comune: 1, provincia: 1, ultimoCensimento: 1, vie: 1 });
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json(comuni.map(c => ({
+      comune: c.comune, provincia: c.provincia || '',
+      ultimoCensimento: c.ultimoCensimento || '',
+      quanteVie: (c.vie || []).length,
+      quantiCivici: (c.vie || []).reduce((s, v) => s + (v.civici || []).length, 0)
+    })).sort((a, b) => a.comune.localeCompare(b.comune)));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* L'elenco delle vie di un comune, senza i civici: serve solo a scegliere */
+app.get('/api/pubblico/censimento/:comune/vie', async (req, res) => {
+  try {
+    const s = await Stradario.findOne({ comune: String(req.params.comune || '').toUpperCase() });
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({
+      comune: s.comune,
+      vie: (s.vie || []).map(v => ({
+        nome: v.nome, zona: v.zone || '',
+        civici: (v.civici || []).length,
+        citofoni: (v.civici || []).reduce((n, c) => n + (c.citofoni || []).length, 0),
+        censiti: (v.civici || []).reduce((n, c) =>
+          n + (c.citofoni || []).filter(x => x.nome).length, 0)
+      })).sort((a, b) => a.nome.localeCompare(b.nome))
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Una via con tutti i suoi civici e citofoni: e' quello che si ha in mano
+   mentre si sta davanti al portone */
+app.get('/api/pubblico/censimento/:comune/via/:via', async (req, res) => {
+  try {
+    const s = await Stradario.findOne({ comune: String(req.params.comune || '').toUpperCase() });
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+    const via = (s.vie || []).find(v => v.nome === req.params.via);
+    if (!via) return res.status(404).json({ error: 'Via non trovata' });
+
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({
+      comune: s.comune, via: via.nome, zona: via.zone || '',
+      civici: (via.civici || []).map(c => ({
+        numero: c.numero, contesto: c.contestoCivico || '', note: c.note || '',
+        citofoni: (c.citofoni || []).map((x, k) => ({
+          indice: k, nome: x.nome || '', piano: x.piano || '',
+          stato: x.statoProprietario || '', vani: x.vani || '', mq: x.mq || ''
+        }))
+      })).sort((a, b) => String(a.numero).localeCompare(String(b.numero), 'it', { numeric: true }))
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Scrivere un citofono dal campo. Se il civico non esiste lo creo:
+   davanti al portone si scopre spesso un numero che non era in elenco. */
+app.put('/api/pubblico/censimento/:comune/citofono', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const comune = String(req.params.comune || '').toUpperCase();
+    const s = await Stradario.findOne({ comune });
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    let via = (s.vie || []).find(v => v.nome === b.via);
+    if (!via) { s.vie.push({ nome: b.via, zone: 'CENTRO', civici: [] }); via = s.vie[s.vie.length - 1]; }
+
+    let civico = (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    if (!civico) {
+      via.civici.push({ numero: String(b.civico), contestoCivico: b.contesto || 'Palazzina', citofoni: [] });
+      civico = via.civici[via.civici.length - 1];
+    }
+
+    if (b.indice !== undefined && b.indice !== null && civico.citofoni[b.indice]) {
+      const c = civico.citofoni[b.indice];
+      if (b.nome !== undefined) c.nome = b.nome;
+      if (b.piano !== undefined) c.piano = b.piano;
+      if (b.stato !== undefined) c.statoProprietario = b.stato;
+    } else {
+      civico.citofoni.push({
+        nome: b.nome || '', piano: b.piano || '', statoProprietario: b.stato || ''
+      });
+    }
+
+    s.censitoDa = b.consulente || s.censitoDa;
+    s.ultimoCensimento = new Date().toISOString().slice(0, 10);
+    s.markModified('vie');
+    await s.save();
+
+    res.status(200).json({ status: 'success', citofoni: civico.citofoni.length });
+  } catch (err) {
+    console.error('Citofono non salvato:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================
    ACQUIRENTI PER IL TELEFONO
    Le richieste in banca dati e le visite fatte, con quello che serve in
    giro: chi cerca cosa, e cosa ha detto chi ha visto la casa.
