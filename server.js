@@ -2797,6 +2797,24 @@ app.put('/api/pubblico/censimento/:comune/contesto', async (req, res) => {
   }
 });
 
+/* Creare un amministratore dal campo: nasce con il solo nome, il resto si
+   completa in ufficio */
+app.post('/api/pubblico/amministratori', async (req, res) => {
+  try {
+    const nome = String((req.body || {}).nome || '').trim();
+    if (!nome) return res.status(400).json({ error: 'Serve il nome' });
+
+    const gia = await Amministratore.findOne({ nomeStudio: new RegExp('^\\s*' + nome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') });
+    if (gia) return res.status(200).json({ status: 'esisteva', id: String(gia._id), nome: gia.nomeStudio });
+
+    const creato = await Amministratore.create({
+      nomeStudio: nome, consulente: String((req.body || {}).consulente || ''),
+      rapporto: 'Da conoscere'
+    });
+    res.status(201).json({ status: 'success', id: String(creato._id), nome });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* Gli amministratori gia' noti, per il menu a discesa */
 app.get('/api/pubblico/amministratori', async (req, res) => {
   try {
