@@ -2631,6 +2631,16 @@ app.get('/api/pubblico/kpi/:utente', async (req, res) => {
    Sul campo si citofona e si annota. La pagina scarica una via per volta:
    caricare un comune intero su una connessione mobile non ha senso.
 ========================================== */
+/* I comuni sono salvati come li scrive chi li crea — "Legnano", non
+   "LEGNANO". Cercare in maiuscolo non trovava niente: qui si cerca senza
+   badare a maiuscole ne' a spazi in piu'. */
+function trovaComune(nome) {
+  const pulito = String(nome || '').trim();
+  if (!pulito) return Promise.resolve(null);
+  const sicuro = pulito.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return Stradario.findOne({ comune: new RegExp('^\\s*' + sicuro + '\\s*$', 'i') });
+}
+
 app.get('/api/pubblico/censimento/comuni', async (req, res) => {
   try {
     const comuni = await Stradario.find({}, { comune: 1, provincia: 1, ultimoCensimento: 1, vie: 1 });
@@ -2673,11 +2683,8 @@ app.get('/api/pubblico/censimento/diagnosi', async (req, res) => {
 /* L'elenco delle vie di un comune, senza i civici: serve solo a scegliere */
 app.get('/api/pubblico/censimento/:comune/vie', async (req, res) => {
   try {
-    const cercato = String(req.params.comune || '').toUpperCase().trim();
-    let s = await Stradario.findOne({ comune: cercato });
-    /* i comuni salvati possono avere spazi o maiuscole diverse: se la ricerca
-       esatta fallisce provo senza distinzione */
-    if (!s) s = await Stradario.findOne({ comune: new RegExp('^' + cercato.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') });
+    const cercato = String(req.params.comune || '').trim();
+    const s = await trovaComune(cercato);
     if (!s) {
       const esistenti = await Stradario.find({}, { comune: 1 }).limit(30);
       return res.status(404).json({
@@ -2706,9 +2713,12 @@ app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
     /* il nome della via arriva come parametro di ricerca, non dentro il
        percorso: nomi come "VIA A/B" spezzerebbero la rotta in due */
     const cercata = String(req.query.nome || '');
-    const s = await Stradario.findOne({ comune: String(req.params.comune || '').toUpperCase() });
-    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
-    const via = (s.vie || []).find(v => String(v.nome).trim() === cercata.trim());
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato', cercato: req.params.comune });
+    /* anche il nome della via si confronta senza badare a maiuscole e spazi:
+       nel database sta come l'ha scritto chi l'ha creata */
+    const uguale = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, cercata));
     if (!via) {
       return res.status(404).json({
         error: 'Via non trovata', cercata,
@@ -2735,9 +2745,8 @@ app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
 app.put('/api/pubblico/censimento/:comune/citofono', async (req, res) => {
   try {
     const b = req.body || {};
-    const comune = String(req.params.comune || '').toUpperCase();
-    const s = await Stradario.findOne({ comune });
-    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato', cercato: req.params.comune });
 
     let via = (s.vie || []).find(v => v.nome === b.via);
     if (!via) { s.vie.push({ nome: b.via, zone: 'CENTRO', civici: [] }); via = s.vie[s.vie.length - 1]; }
