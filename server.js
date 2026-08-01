@@ -188,6 +188,10 @@ const StradarioSchema = new mongoose.Schema({
           numero: { type: String, required: true },
           note: { type: String, default: '' },
           contestoCivico: { type: String, default: 'Palazzina' },
+          /* i dati dello stabile: raccolti stando davanti al portone */
+          annoCostruzione: { type: String, default: '' },   // fascia di dieci anni
+          statoStabile: { type: Number, default: 0 },       // da zero a tre stelle
+          amministratore: { type: String, default: '' },
           foglio: { type: String, default: '' },
           particella: { type: String, default: '' },
           citofoni: [
@@ -2627,6 +2631,27 @@ app.get('/api/pubblico/kpi/:utente', async (req, res) => {
 });
 
 /* ==========================================
+   AMMINISTRATORI DI CONDOMINIO
+   Chi amministra gli stabili censiti. E' capitale sociale: un amministratore
+   che si fida porta incarichi senza che tu li cerchi.
+========================================== */
+const AmministratoreSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  nomeStudio: { type: String, default: '' },
+  referente: { type: String, default: '' },
+  telefono: { type: String, default: '' },
+  mail: { type: String, default: '' },
+  indirizzo: { type: String, default: '' },
+  comune: { type: String, default: '' },
+  quantiStabili: { type: String, default: '' },
+  rapporto: { type: String, default: 'Da conoscere' },  // Da conoscere | Contattato | In rapporto | Collabora
+  ultimoContatto: { type: String, default: '' },
+  note: { type: String, default: '' }
+}, { timestamps: true });
+const Amministratore = mongoose.model('Amministratore', AmministratoreSchema);
+registraRotteScheda('amministratori', Amministratore, 'Amministratori');
+
+/* ==========================================
    CENSIMENTO DA TELEFONO
    Sul campo si citofona e si annota. La pagina scarica una via per volta:
    caricare un comune intero su una connessione mobile non ha senso.
@@ -2731,12 +2756,57 @@ app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
       comune: s.comune, via: via.nome, zona: via.zone || '',
       civici: (via.civici || []).map(c => ({
         numero: c.numero, contesto: c.contestoCivico || '', note: c.note || '',
+        anno: c.annoCostruzione || '', stato: c.statoStabile || 0,
+        amministratore: c.amministratore || '',
+        foglio: c.foglio || '', particella: c.particella || '',
         citofoni: (c.citofoni || []).map((x, k) => ({
           indice: k, nome: x.nome || '', piano: x.piano || '',
           stato: x.statoProprietario || '', vani: x.vani || '', mq: x.mq || ''
         }))
       })).sort((a, b) => String(a.numero).localeCompare(String(b.numero), 'it', { numeric: true }))
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* I dati dello stabile: contesto, anni, stato e amministratore */
+app.put('/api/pubblico/censimento/:comune/contesto', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    const uguale = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, b.via));
+    if (!via) return res.status(404).json({ error: 'Via non trovata' });
+
+    const civico = (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    if (!civico) return res.status(404).json({ error: 'Civico non trovato' });
+
+    if (b.contesto !== undefined) civico.contestoCivico = b.contesto;
+    if (b.anno !== undefined) civico.annoCostruzione = b.anno;
+    if (b.stato !== undefined) civico.statoStabile = Number(b.stato) || 0;
+    if (b.amministratore !== undefined) civico.amministratore = b.amministratore;
+    if (b.note !== undefined) civico.note = b.note;
+
+    s.markModified('vie');
+    await s.save();
+    res.status(200).json({ status: 'success' });
+  } catch (err) {
+    console.error('Contesto non salvato:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Gli amministratori gia' noti, per il menu a discesa */
+app.get('/api/pubblico/amministratori', async (req, res) => {
+  try {
+    const elenco = await Amministratore.find({}, { nomeStudio: 1, referente: 1, telefono: 1, comune: 1 });
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json(elenco
+      .map(a => ({ id: String(a._id), nome: a.nomeStudio || a.referente || '',
+                   telefono: a.telefono || '', comune: a.comune || '' }))
+      .filter(a => a.nome)
+      .sort((x, y) => x.nome.localeCompare(y.nome)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
