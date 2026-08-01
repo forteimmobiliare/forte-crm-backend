@@ -2759,6 +2759,15 @@ app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
         anno: c.annoCostruzione || '', stato: c.statoStabile || 0,
         amministratore: c.amministratore || '',
         foglio: c.foglio || '', particella: c.particella || '',
+        /* le unita' risultanti da visura: chi possiede cosa, anche se non
+           ci abita — e' il grosso di quello che serve in acquisizione */
+        unita: (c.proprietariNonResidenti || []).map((u, k) => ({
+          indice: k, sub: u.sub || '', piano: u.piano || '',
+          vani: u.vani || '', mq: u.mq || '',
+          proprietari: (u.proprietari || []).map(p => ({
+            nome: p.nomeCognome || '', cf: p.cf || '', anno: p.annoNascita || ''
+          }))
+        })),
         citofoni: (c.citofoni || []).map((x, k) => ({
           indice: k, nome: x.nome || '', piano: x.piano || '',
           stato: x.statoProprietario || '', vani: x.vani || '', mq: x.mq || ''
@@ -2797,6 +2806,70 @@ app.put('/api/pubblico/censimento/:comune/contesto', async (req, res) => {
     console.error('Contesto non salvato:', err);
     res.status(500).json({ error: err.message });
   }
+});
+
+/* Le unita' da visura: sub, piano, e chi le possiede. Si scrivono dal campo
+   perche' la visura si legge spesso sul telefono, davanti al portone. */
+app.put('/api/pubblico/censimento/:comune/unita', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    const uguale = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, b.via));
+    if (!via) return res.status(404).json({ error: 'Via non trovata' });
+
+    const civico = (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    if (!civico) return res.status(404).json({ error: 'Civico non trovato' });
+
+    if (!civico.proprietariNonResidenti) civico.proprietariNonResidenti = [];
+
+    /* se arriva un indice modifico quella, altrimenti ne aggiungo una */
+    let unita;
+    if (b.indice !== undefined && b.indice !== null && civico.proprietariNonResidenti[b.indice]) {
+      unita = civico.proprietariNonResidenti[b.indice];
+    } else {
+      civico.proprietariNonResidenti.push({ sub: '', piano: '', vani: '', mq: '', proprietari: [] });
+      unita = civico.proprietariNonResidenti[civico.proprietariNonResidenti.length - 1];
+    }
+
+    if (b.sub !== undefined) unita.sub = b.sub;
+    if (b.piano !== undefined) unita.piano = b.piano;
+    if (b.vani !== undefined) unita.vani = b.vani;
+    if (b.mq !== undefined) unita.mq = b.mq;
+    if (Array.isArray(b.proprietari)) {
+      unita.proprietari = b.proprietari.map(p => ({
+        nomeCognome: p.nome || '', cf: p.cf || '', annoNascita: p.anno || ''
+      }));
+    }
+
+    s.markModified('vie');
+    await s.save();
+    res.status(200).json({ status: 'success', quante: civico.proprietariNonResidenti.length });
+  } catch (err) {
+    console.error('Unità non salvata:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Togliere un'unita' inserita per sbaglio */
+app.delete('/api/pubblico/censimento/:comune/unita', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    const uguale = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, b.via));
+    const civico = via && (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    if (!civico) return res.status(404).json({ error: 'Civico non trovato' });
+
+    (civico.proprietariNonResidenti || []).splice(b.indice, 1);
+    s.markModified('vie');
+    await s.save();
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /* Creare un amministratore dal campo: nasce con il solo nome, il resto si
