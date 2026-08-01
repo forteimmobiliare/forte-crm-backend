@@ -2626,6 +2626,71 @@ app.get('/api/pubblico/kpi/:utente', async (req, res) => {
   }
 });
 
+/* ==========================================
+   ACQUIRENTI PER IL TELEFONO
+   Le richieste in banca dati e le visite fatte, con quello che serve in
+   giro: chi cerca cosa, e cosa ha detto chi ha visto la casa.
+========================================== */
+app.get('/api/pubblico/acquirenti/:utente', async (req, res) => {
+  try {
+    const utente = String(req.params.utente || '');
+    const suo = (r) => !utente || r.consulente === utente;
+
+    const [richieste, visite, incarichi] = await Promise.all([
+      BancaDati.find({}).limit(700),
+      Visioni.find({}).limit(700),
+      Incarico.find({}, { idElemento: 1, nome: 1 }).limit(500)
+    ]);
+
+    const nomeImmobile = (id) => {
+      const i = incarichi.find(x => x.idElemento === id);
+      return i ? (i.nome || i.idElemento) : (id || '');
+    };
+
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json({
+      utente,
+      richieste: richieste.filter(suo).map(r => ({
+        id: String(r._id), nome: r.nomeCognome || '', telefono: r.telefono || '',
+        mail: r.mail || '', stato: r.statoAdvFix || 'Da Fix',
+        zone: r.comuniRicerca || '', tipologia: r.tipologiaUnita || '',
+        contesto: r.tipologiaContesto || '', budget: r.budgetAcquisto || '',
+        mutuo: r.mutuo || '', deveVendere: r.deveVendere || '',
+        immobile: nomeImmobile(r.immobileFonteRichiesta),
+        quando: String(r.createdAt || '').slice(0, 10)
+      })).sort((a, b) => String(b.quando).localeCompare(String(a.quando))),
+
+      visite: visite.filter(suo).map(v => ({
+        id: String(v._id), nome: v.nomeCognome || '', telefono: v.telefono || '',
+        data: String(v.dataVisione || '').slice(0, 10), ora: v.oraVisione || '',
+        statoAdv: v.statoAdv || 'Fissato', feedback: v.feedbackAdv || '',
+        testo: v.testoFeedback || '', valore: v.valorePercepito || '',
+        immobile: nomeImmobile(v.incaricoUfficio),
+        statoProposta: v.statoProposta || 'No'
+      })).sort((a, b) => String(b.data).localeCompare(String(a.data)))
+    });
+  } catch (err) {
+    console.error('Acquirenti non letti:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Segnare com'e' andata una visita, da fuori */
+app.put('/api/pubblico/visita/:id', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const modifiche = {};
+    if (b.statoAdv && ['Fissato', 'Fatto', 'Saltato'].indexOf(b.statoAdv) >= 0) modifiche.statoAdv = b.statoAdv;
+    if (typeof b.feedbackAdv === 'string') modifiche.feedbackAdv = b.feedbackAdv;
+    if (typeof b.testoFeedback === 'string') modifiche.testoFeedback = b.testoFeedback;
+    if (typeof b.valorePercepito === 'string') modifiche.valorePercepito = b.valorePercepito;
+    if (!Object.keys(modifiche).length) return res.status(400).json({ error: 'Niente da salvare' });
+
+    await Visioni.findByIdAndUpdate(req.params.id, modifiche);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* Le attivita' del consulente per il telefono. Le date qui sono scritte
    come giorno/mese/anno, quindi vanno convertite per confrontarle. */
 app.get('/api/pubblico/attivita/:utente', async (req, res) => {
@@ -2688,7 +2753,9 @@ app.get('/api/pubblico/agenda/:utente', async (req, res) => {
     const visioni = await Visioni.find({}).limit(600);
     visioni.filter(v => suo(v) && nelPeriodo(v.dataVisione)).forEach(v => {
       eventi.push({ tipo: 'visione', data: String(v.dataVisione).slice(0, 10),
-        orario: v.orario || '', titolo: 'Visita ' + (v.nomeCognome || ''),
+        /* il campo si chiama oraVisione: leggendo "orario" l'agenda mostrava
+           tutte le visite come "tutto il giorno" */
+        orario: v.oraVisione || '', titolo: 'Visita ' + (v.nomeCognome || ''),
         dettaglio: v.incaricoUfficio || '', telefono: v.telefono || '' });
     });
 
