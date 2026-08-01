@@ -2644,11 +2644,47 @@ app.get('/api/pubblico/censimento/comuni', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* Dice cosa c'e' davvero nello stradario: serve quando qualcosa non torna
+   e non si vuole tirare a indovinare. */
+app.get('/api/pubblico/censimento/diagnosi', async (req, res) => {
+  try {
+    const tutti = await Stradario.find({}, { comune: 1, vie: 1 }).limit(50);
+    res.status(200).json({
+      quantiComuni: tutti.length,
+      comuni: tutti.map(c => ({
+        comune: c.comune,
+        vie: (c.vie || []).length,
+        primeVie: (c.vie || []).slice(0, 3).map(v => ({
+          nome: v.nome,
+          civici: (v.civici || []).length,
+          primoCivico: (v.civici || [])[0]
+            ? { numero: (v.civici || [])[0].numero,
+                citofoni: ((v.civici || [])[0].citofoni || []).length }
+            : null
+        }))
+      }))
+    });
+  } catch (err) {
+    console.error('Diagnosi non riuscita:', err);
+    res.status(500).json({ error: err.message, dove: 'lettura dello stradario' });
+  }
+});
+
 /* L'elenco delle vie di un comune, senza i civici: serve solo a scegliere */
 app.get('/api/pubblico/censimento/:comune/vie', async (req, res) => {
   try {
-    const s = await Stradario.findOne({ comune: String(req.params.comune || '').toUpperCase() });
-    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+    const cercato = String(req.params.comune || '').toUpperCase().trim();
+    let s = await Stradario.findOne({ comune: cercato });
+    /* i comuni salvati possono avere spazi o maiuscole diverse: se la ricerca
+       esatta fallisce provo senza distinzione */
+    if (!s) s = await Stradario.findOne({ comune: new RegExp('^' + cercato.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') });
+    if (!s) {
+      const esistenti = await Stradario.find({}, { comune: 1 }).limit(30);
+      return res.status(404).json({
+        error: 'Comune non trovato', cercato,
+        disponibili: esistenti.map(x => x.comune)
+      });
+    }
     res.set('Cache-Control', 'no-store');
     res.status(200).json({
       comune: s.comune,
@@ -2665,12 +2701,20 @@ app.get('/api/pubblico/censimento/:comune/vie', async (req, res) => {
 
 /* Una via con tutti i suoi civici e citofoni: e' quello che si ha in mano
    mentre si sta davanti al portone */
-app.get('/api/pubblico/censimento/:comune/via/:via', async (req, res) => {
+app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
   try {
+    /* il nome della via arriva come parametro di ricerca, non dentro il
+       percorso: nomi come "VIA A/B" spezzerebbero la rotta in due */
+    const cercata = String(req.query.nome || '');
     const s = await Stradario.findOne({ comune: String(req.params.comune || '').toUpperCase() });
     if (!s) return res.status(404).json({ error: 'Comune non trovato' });
-    const via = (s.vie || []).find(v => v.nome === req.params.via);
-    if (!via) return res.status(404).json({ error: 'Via non trovata' });
+    const via = (s.vie || []).find(v => String(v.nome).trim() === cercata.trim());
+    if (!via) {
+      return res.status(404).json({
+        error: 'Via non trovata', cercata,
+        primeVie: (s.vie || []).slice(0, 5).map(v => v.nome)
+      });
+    }
 
     res.set('Cache-Control', 'no-store');
     res.status(200).json({
