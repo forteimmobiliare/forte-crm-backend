@@ -2787,6 +2787,8 @@ app.put('/api/pubblico/censimento/:comune/contesto', async (req, res) => {
     if (b.stato !== undefined) civico.statoStabile = Number(b.stato) || 0;
     if (b.amministratore !== undefined) civico.amministratore = b.amministratore;
     if (b.note !== undefined) civico.note = b.note;
+    if (b.foglio !== undefined) civico.foglio = b.foglio;
+    if (b.particella !== undefined) civico.particella = b.particella;
 
     s.markModified('vie');
     await s.save();
