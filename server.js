@@ -2847,6 +2847,32 @@ app.post('/api/pubblico/censimento/:comune/attivita', async (req, res) => {
   }
 });
 
+/* La nota su un'attivita' gia' segnata: si scrive dopo, con calma */
+app.put('/api/pubblico/censimento/:comune/nota', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const s = await trovaComune(req.params.comune);
+    if (!s) return res.status(404).json({ error: 'Comune non trovato' });
+
+    const uguale = (x, y) => String(x || '').trim().toLowerCase() === String(y || '').trim().toLowerCase();
+    const via = (s.vie || []).find(v => uguale(v.nome, b.via));
+    const civico = via && (via.civici || []).find(c => String(c.numero) === String(b.civico));
+    const citofono = civico && (civico.citofoni || [])[b.indice];
+    if (!citofono) return res.status(404).json({ error: 'Citofono non trovato' });
+
+    const attivita = (citofono.attivita || []).find(a => String(a.quando) === String(b.quando));
+    if (!attivita) return res.status(404).json({ error: 'Attività non trovata' });
+
+    attivita.nota = String(b.nota || '');
+    s.markModified('vie');
+    await s.save();
+    res.status(200).json({ status: 'success' });
+  } catch (err) {
+    console.error('Nota non salvata:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /* Togliere un'attivita' segnata per sbaglio */
 app.delete('/api/pubblico/censimento/:comune/attivita', async (req, res) => {
   try {
