@@ -874,6 +874,9 @@ const CapitaleSocialeSchema = new mongoose.Schema({
   nome: { type: String, required: true },
   cf: { type: String, default: '' },
   dataNascita: { type: String, default: '' },
+  /* il luogo di nascita arriva dalle visure del censimento: serve al
+     preliminare, e riscriverlo a mano significa sbagliarlo */
+  luogoNascita: { type: String, default: '' },
   tel: { type: String, default: '' },
   mail: { type: String, default: '' },
   social: {
@@ -3841,7 +3844,7 @@ app.get('/api/capitale-sociale', async (req, res) => {
 
 app.post('/api/capitale-sociale', async (req, res) => {
   try {
-    const { nome, cf, tel, mail, inseritoDa, casaCensita } = req.body;
+    const { nome, cf, tel, mail, inseritoDa, casaCensita, dataNascita, luogoNascita } = req.body;
 
     // Se la chiamata proviene dall'automazione del citofono, verifichiamo la presenza duplicati
     if (casaCensita) {
@@ -3863,12 +3866,20 @@ app.post('/api/capitale-sociale', async (req, res) => {
           // Immobile già collegato: aggiorniamo sempre i suoi dettagli con quelli più recenti
           proprietarioEsistente.proprieta[indiceEsistente].set(casaCensita);
         }
+        /* Completo cio' che manca senza sovrascrivere quello che c'e' gia':
+           l'automazione porta i dati della visura, ma un codice fiscale
+           corretto a mano non va buttato via. */
+        if (cf && !proprietarioEsistente.cf) proprietarioEsistente.cf = cf;
+        if (dataNascita && !proprietarioEsistente.dataNascita) proprietarioEsistente.dataNascita = dataNascita;
+        if (luogoNascita && !proprietarioEsistente.luogoNascita) proprietarioEsistente.luogoNascita = luogoNascita;
+
         await proprietarioEsistente.save();
         return res.status(200).json({ status: 'success', message: 'Anagrafica aggiornata.', data: proprietarioEsistente });
       } else {
         // Nuovo proprietario assoluto, creiamo il record con la prima casa dentro l'array
         const nuovoRecord = new CapitaleSociale({
           nome, cf, tel, mail, inseritoDa,
+          dataNascita: dataNascita || '', luogoNascita: luogoNascita || '',
           proprieta: [casaCensita]
         });
         await nuovoRecord.save();
