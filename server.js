@@ -1364,8 +1364,49 @@ il proprio giudizio sulla visita appena fatta.
 
 app.post('/api/analizza-citofono', async (req, res) => {
   try {
-    const { immagineBase64, tipoMime, messaggio } = req.body;
+    const { immagineBase64, tipoMime, messaggio, soloNomi } = req.body;
     if (!immagineBase64) return res.status(400).json({ error: 'Immagine mancante' });
+
+    /* Chiamata dal civico l'indirizzo lo sappiamo gia': chiedere al modello
+       di indovinarlo e' lavoro sprecato, e un indirizzo inventato confonde
+       chi legge la risposta. In quel caso si chiedono solo i nomi. */
+    if (soloNomi) {
+      const soloElenco = `Guarda questa foto di una pulsantiera citofonica.
+Estrai TUTTI i nomi scritti sulle targhette, uno per pulsante, nell'ordine in cui
+compaiono dall'alto verso il basso. Riportali esattamente come sono scritti, anche
+se poco chiari: fai la tua migliore lettura e non inventare nomi che non vedi.
+Se una targhetta è vuota o illeggibile, saltala.
+Rispondi SOLO con un oggetto JSON valido: {"nomi": ["nome1", "nome2"]}`;
+
+      const corpo = JSON.stringify({
+        contents: [{ role: 'user', parts: [
+          { text: soloElenco },
+          { inline_data: { mime_type: tipoMime || 'image/jpeg', data: immagineBase64 } }
+        ] }],
+        generationConfig: { responseMimeType: 'application/json' }
+      });
+
+      const risposta = await new Promise((risolvi, rifiuta) => {
+        const r = https.request({
+          hostname: 'generativelanguage.googleapis.com',
+          path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpo) }
+        }, (x) => { let d = ''; x.on('data', p => d += p); x.on('end', () => risolvi(d)); });
+        r.on('error', rifiuta); r.write(corpo); r.end();
+      });
+
+      const dati = JSON.parse(risposta);
+      const testo = dati && dati.candidates && dati.candidates[0] &&
+                    dati.candidates[0].content && dati.candidates[0].content.parts &&
+                    dati.candidates[0].content.parts[0] && dati.candidates[0].content.parts[0].text;
+      if (!testo) {
+        console.error('Risposta inattesa dalla lettura della pulsantiera:', JSON.stringify(dati).slice(0, 400));
+        return res.status(502).json({ error: 'Il modello non ha risposto come previsto' });
+      }
+      const estratto = JSON.parse(testo);
+      return res.status(200).json({ nomi: (estratto.nomi || []).filter(n => String(n).trim()) });
+    }
 
     const promptEstrazione = `Guarda questa foto di una targa/bussola citofonica di un condominio. Estrai TUTTI i nomi
 scritti su ciascun pulsante/etichetta, uno per uno, esattamente come sono scritti (anche se poco chiari, fai la tua
