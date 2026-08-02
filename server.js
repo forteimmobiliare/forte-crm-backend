@@ -3097,6 +3097,24 @@ app.post('/api/pubblico/amministratori', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* Gli appuntamenti che non nascono da una scheda: riunioni, giri di zona,
+   ferie, tutto quello che sta in agenda senza essere una visione o un rogito. */
+const AppuntamentoSchema = new mongoose.Schema({
+  consulente: { type: String, default: '' },
+  titolo: { type: String, default: '' },
+  tipo: { type: String, default: 'appuntamento' },
+  data: { type: String, default: '' },        // aaaa-mm-gg
+  ora: { type: String, default: '' },         // hh:mm, vuoto = tutto il giorno
+  durata: { type: Number, default: 60 },      // minuti
+  luogo: { type: String, default: '' },
+  note: { type: String, default: '' },
+  conChi: { type: String, default: '' },
+  creatoDa: { type: String, default: '' }
+}, { timestamps: true });
+
+const Appuntamento = mongoose.model('Appuntamento', AppuntamentoSchema);
+registraRotteScheda('appuntamenti', Appuntamento);
+
 /* Gli amministratori gia' noti, per il menu a discesa */
 app.get('/api/pubblico/amministratori', async (req, res) => {
   try {
