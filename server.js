@@ -3900,6 +3900,49 @@ app.post('/api/capitale-sociale', async (req, res) => {
 // Se la motivazione è "Cambio Nominativo", l'unità rimossa viene archiviata in Unità Rimosse
 // (utile per capire quali immobili sono stati venduti/passati ad altro proprietario).
 // Se dopo la rimozione il proprietario non ha più nessun immobile collegato, la scheda viene eliminata.
+/* Riporta nel censimento i dati corretti in anagrafica. Cerca la persona
+   nelle unita' da visura degli immobili che le sono attribuiti: e' un giro
+   corto, perche' gli immobili li conosciamo gia' dal suo elenco. */
+async function allineaCensimentoDaAnagrafica(proprietario) {
+  try {
+    const nome = String(proprietario.nome || '').trim().toLowerCase();
+    if (!nome) return;
+
+    const comuni = Array.from(new Set(
+      (proprietario.proprieta || []).map(p => p.paese).filter(Boolean)));
+    if (!comuni.length) return;
+
+    for (const nomeComune of comuni) {
+      const s = await trovaComune(nomeComune);
+      if (!s) continue;
+      let toccato = false;
+
+      (s.vie || []).forEach(via => {
+        (via.civici || []).forEach(civ => {
+          (civ.proprietariNonResidenti || []).forEach(unita => {
+            (unita.proprietari || []).forEach(p => {
+              if (String(p.nomeCognome || '').trim().toLowerCase() !== nome) return;
+              if (proprietario.cf !== undefined && p.cf !== proprietario.cf) {
+                p.cf = proprietario.cf; toccato = true;
+              }
+              if (proprietario.dataNascita !== undefined && p.dataNascita !== proprietario.dataNascita) {
+                p.dataNascita = proprietario.dataNascita; toccato = true;
+              }
+              if (proprietario.luogoNascita !== undefined && p.luogoNascita !== proprietario.luogoNascita) {
+                p.luogoNascita = proprietario.luogoNascita; toccato = true;
+              }
+            });
+          });
+        });
+      });
+
+      if (toccato) { s.markModified('vie'); await s.save(); }
+    }
+  } catch (err) {
+    console.error('Allineamento del censimento non riuscito:', err);
+  }
+}
+
 app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
   try {
     const { nome, paese, via, civico, sub, motivazione, rimossoDa } = req.body;
@@ -3937,13 +3980,19 @@ app.put('/api/capitale-sociale/rimuovi-immobile', async (req, res) => {
 // Modifica i dettagli anagrafici di un proprietario già censito (data nascita, telefono, mail, social)
 app.put('/api/capitale-sociale/:id/dettagli', async (req, res) => {
   try {
-    const campiConsentiti = ['dataNascita', 'tel', 'mail', 'social', 'cf', 'residenzaId'];
+    const campiConsentiti = ['dataNascita', 'luogoNascita', 'tel', 'mail', 'social', 'cf', 'residenzaId'];
     const aggiornamento = {};
     for (const campo of campiConsentiti) {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
     }
     const aggiornato = await CapitaleSociale.findByIdAndUpdate(req.params.id, { $set: aggiornamento }, { new: true });
     if (!aggiornato) return res.status(404).json({ error: 'Proprietario non trovato' });
+
+    /* Il dato torna anche nel censimento: senza questo, correggendo un codice
+       fiscale in anagrafica restava quello sbagliato nelle visure, e le due
+       copie divergevano senza che nessuno se ne accorgesse. */
+    await allineaCensimentoDaAnagrafica(aggiornato);
+
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
