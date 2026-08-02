@@ -2787,7 +2787,8 @@ app.get('/api/pubblico/censimento/:comune/via', async (req, res) => {
           indice: k, sub: u.sub || '', piano: u.piano || '',
           vani: u.vani || '', mq: u.mq || '',
           proprietari: (u.proprietari || []).map(p => ({
-            nome: p.nomeCognome || '', cf: p.cf || '', anno: p.annoNascita || ''
+            nome: p.nomeCognome || '', cf: p.cf || '', anno: p.annoNascita || '',
+            dataNascita: p.dataNascita || '', luogoNascita: p.luogoNascita || ''
           }))
         })),
         citofoni: (c.citofoni || []).map((x, k) => ({
@@ -2945,7 +2946,8 @@ app.put('/api/pubblico/censimento/:comune/unita', async (req, res) => {
     if (b.mq !== undefined) unita.mq = b.mq;
     if (Array.isArray(b.proprietari)) {
       unita.proprietari = b.proprietari.map(p => ({
-        nomeCognome: p.nome || '', cf: p.cf || '', annoNascita: p.anno || ''
+        nomeCognome: p.nome || '', cf: p.cf || '', annoNascita: p.anno || '',
+        dataNascita: p.dataNascita || '', luogoNascita: p.luogoNascita || ''
       }));
     }
 
