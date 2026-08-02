@@ -183,6 +183,10 @@ const StradarioSchema = new mongoose.Schema({
     {
       nome: { type: String, required: true },
       zone: { type: String, default: 'CENTRO' },
+      /* quando si e' ripassata questa via: si ricensisce la via, non il
+         comune intero, e la data sul comune non diceva niente di utile */
+      ultimoPassaggio: { type: String, default: '' },
+      passatoDa: { type: String, default: '' },
       civici: [
         {
           numero: { type: String, required: true },
