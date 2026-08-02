@@ -2498,6 +2498,13 @@ const VolantinoSchema = new mongoose.Schema({
   testo: { type: String, default: '' },
   richiamo: { type: String, default: '' },        // la frase che invita ad agire
   tipoCodice: { type: String, default: 'whatsapp' },
+  /* il retro: si stampa fronte-retro, e quasi sempre e' li' che si mettono
+     le ragioni per chiamare */
+  conRetro: { type: Boolean, default: false },
+  retroTestata: { type: String, default: '' },
+  retroTesto: { type: String, default: '' },
+  retroPunti: { type: Array, default: [] },
+  modello: { type: String, default: '' },
   linkCodice: { type: String, default: '' },
   immagine: { type: String, default: '' },
   zona: { type: String, default: '' },
