@@ -227,7 +227,11 @@ const StradarioSchema = new mongoose.Schema({
                   _id: { type: mongoose.Schema.Types.ObjectId, default: () => new mongoose.Types.ObjectId() },
                   nomeCognome: { type: String, default: '' },
                   cf: { type: String, default: '' },
-                  annoNascita: { type: String, default: '' }
+                  annoNascita: { type: String, default: '' },
+                  /* data e luogo per esteso: dalla visura si leggono, e servono
+                     per il preliminare senza doverli ricercare */
+                  dataNascita: { type: String, default: '' },
+                  luogoNascita: { type: String, default: '' }
                 }
               ]
             }
