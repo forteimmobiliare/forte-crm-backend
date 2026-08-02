@@ -1362,6 +1362,40 @@ del suo incarico), vede solo conteggi aggregati (mai nomi) di richieste e vision
 il proprio giudizio sulla visita appena fatta.
 `.trim();
 
+/* Dice se la lettura delle foto puo' funzionare: quale modello, se la chiave
+   c'e', e cosa risponde Google. Serve quando qualcosa non va e non si vuole
+   tirare a indovinare. */
+app.get('/api/pubblico/prova-visione', async (req, res) => {
+  if (!GEMINI_API_KEY) {
+    return res.status(200).json({ funziona: false, motivo: 'GEMINI_API_KEY non configurata su Render' });
+  }
+  try {
+    const elenco = await new Promise((risolvi, rifiuta) => {
+      https.get({
+        hostname: 'generativelanguage.googleapis.com',
+        path: `/v1beta/models?key=${GEMINI_API_KEY}`
+      }, (r) => { let d = ''; r.on('data', p => d += p); r.on('end', () => risolvi(d)); })
+      .on('error', rifiuta);
+    });
+    const dati = JSON.parse(elenco);
+    if (dati.error) {
+      return res.status(200).json({ funziona: false, modello: GEMINI_MODEL, motivo: dati.error.message });
+    }
+    const nomi = (dati.models || []).map(m => String(m.name || '').replace('models/', ''));
+    const cercato = GEMINI_MODEL;
+    return res.status(200).json({
+      funziona: nomi.indexOf(cercato) >= 0,
+      modelloImpostato: cercato,
+      esiste: nomi.indexOf(cercato) >= 0,
+      motivo: nomi.indexOf(cercato) >= 0 ? 'tutto a posto' : 'il modello impostato non è fra quelli disponibili',
+      /* quali modelli vedono le immagini: serve a scegliere il sostituto */
+      disponibili: nomi.filter(n => /flash|pro/.test(n)).slice(0, 12)
+    });
+  } catch (err) {
+    res.status(200).json({ funziona: false, motivo: err.message });
+  }
+});
+
 app.post('/api/analizza-citofono', async (req, res) => {
   try {
     const { immagineBase64, tipoMime, messaggio, soloNomi } = req.body;
@@ -1396,15 +1430,40 @@ Rispondi SOLO con un oggetto JSON valido: {"nomi": ["nome1", "nome2"]}`;
         r.on('error', rifiuta); r.write(corpo); r.end();
       });
 
-      const dati = JSON.parse(risposta);
+      let dati;
+      try { dati = JSON.parse(risposta); }
+      catch (e) {
+        console.error('Risposta illeggibile:', String(risposta).slice(0, 300));
+        return res.status(502).json({ error: 'Risposta illeggibile dal modello' });
+      }
+
+      /* Google spiega sempre perche' rifiuta: chiave assente, modello che non
+         esiste piu', quota finita. Riportarlo evita di tirare a indovinare. */
+      if (dati.error) {
+        console.error('Lettura rifiutata:', JSON.stringify(dati.error).slice(0, 400));
+        return res.status(502).json({
+          error: dati.error.message || 'Il modello ha rifiutato la richiesta',
+          modello: GEMINI_MODEL,
+          chiaveConfigurata: !!GEMINI_API_KEY
+        });
+      }
+
       const testo = dati && dati.candidates && dati.candidates[0] &&
                     dati.candidates[0].content && dati.candidates[0].content.parts &&
                     dati.candidates[0].content.parts[0] && dati.candidates[0].content.parts[0].text;
       if (!testo) {
-        console.error('Risposta inattesa dalla lettura della pulsantiera:', JSON.stringify(dati).slice(0, 400));
-        return res.status(502).json({ error: 'Il modello non ha risposto come previsto' });
+        console.error('Risposta inattesa dalla lettura:', JSON.stringify(dati).slice(0, 400));
+        return res.status(502).json({
+          error: 'Il modello non ha restituito nomi',
+          modello: GEMINI_MODEL,
+          chiaveConfigurata: !!GEMINI_API_KEY,
+          dettaglio: JSON.stringify(dati).slice(0, 200)
+        });
       }
-      const estratto = JSON.parse(testo);
+
+      let estratto;
+      try { estratto = JSON.parse(testo); }
+      catch (e) { return res.status(502).json({ error: 'Il modello ha risposto in un formato inatteso' }); }
       return res.status(200).json({ nomi: (estratto.nomi || []).filter(n => String(n).trim()) });
     }
 
