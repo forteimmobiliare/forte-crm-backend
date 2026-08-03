@@ -1256,16 +1256,20 @@ app.put('/api/centralino/:id', async (req, res) => {
        Make, e permette di sceglierlo riga per riga finche' non ci si fida
        dell'automatismo. La colonna resta su Inviato anche dopo, ma il campo
        tgInviatoIl impedisce che riparta a ogni salvataggio. */
-    const chiedeTelegram = req.body.tgConsInviato === 'Inviato' && !aggiornato.tgInviatoIl;
-    const chiedeWhatsapp = req.body.mexClienteInviato === 'Inviato' && !aggiornato.mexInviatoIl;
+    /* Quale innesco ha tirato: la colonna che e' stata messa su Inviato */
+    let innesco = '';
+    if (req.body.tgConsInviato === 'Inviato' && !aggiornato.tgInviatoIl) innesco = 'colonna-tg';
+    else if (req.body.mexClienteInviato === 'Inviato' && !aggiornato.mexInviatoIl) innesco = 'colonna-mex';
 
-    if (chiedeTelegram || chiedeWhatsapp) {
+    if (innesco) {
       /* rispondo subito e mando dopo: chi ha cliccato non resta fermo
          davanti alla tabella mentre Telegram fa il suo giro */
       res.status(200).json({ status: 'success', data: aggiornato, invioPartito: true });
-      setImmediate(() => {
-        avvisaPerRigaCentralino(aggiornato, true).catch(err =>
-          console.error('Invio dal centralino non riuscito:', err.message));
+      setImmediate(async () => {
+        try {
+          const scenari = await scenariPerInnesco(innesco);
+          for (const s of scenari) await eseguiScenario(s, aggiornato, true);
+        } catch (err) { console.error('Scenario non riuscito:', err.message); }
       });
       return;
     }
@@ -4190,6 +4194,225 @@ app.post('/api/centralino/:id/riavvisa', async (req, res) => {
     }
     const esiti = await avvisaPerRigaCentralino(riga);
     res.status(200).json(esiti);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+/* ==========================================================================
+   SCENARI
+   Ogni automazione e' una cosa sola: un innesco, un'azione, e un testo. Prima
+   erano due comportamenti dentro la stessa impostazione, e non si poteva
+   tenerne acceso uno solo — ne' capire quale dei due aveva fallito.
+========================================================================== */
+const ScenarioSchema = new mongoose.Schema({
+  nome: { type: String, default: '' },
+  attivo: { type: Boolean, default: false },
+
+  /* cosa lo fa partire */
+  innesco: { type: String, default: 'colonna-tg' },
+  /* colonna-tg      → la colonna Tg Cons Inviato passa su Inviato
+     colonna-mex     → la colonna Mex Cliente Inviato passa su Inviato
+     riga-creata     → nasce una riga nel Registro Chiamate
+     mail-lead       → arriva una mail da un portale                        */
+
+  azione: { type: String, default: 'telegram-consulente' },
+  /* telegram-consulente → avvisa il consulente su Telegram
+     whatsapp-cliente    → scrive al cliente su WhatsApp                    */
+
+  testo: { type: String, default: '' },
+
+  /* la memoria di cosa e' successo: senza, un'automazione e' una scatola
+     chiusa finche' qualcuno non si lamenta */
+  ultimoAvvio: { type: Date, default: null },
+  ultimoEsito: { type: String, default: '' },     // ok | errore
+  ultimoMotivo: { type: String, default: '' },
+  quanteVolte: { type: Number, default: 0 },
+  quantiErrori: { type: Number, default: 0 }
+}, { timestamps: true });
+
+const Scenario = mongoose.model('Scenario', ScenarioSchema);
+
+/* I due scenari di partenza. Nascono spenti: accenderli e' una scelta, non
+   un effetto collaterale del primo avvio. */
+const SCENARI_DI_PARTENZA = [
+  {
+    nome: 'Avvisa il consulente su Telegram',
+    innesco: 'colonna-tg', azione: 'telegram-consulente', attivo: false,
+    testo: '🔔 Nuova richiesta\n\n{nome}\n{telefono}\n{immobile}\n\n{messaggio}'
+  },
+  {
+    nome: 'Scrivi al cliente su WhatsApp',
+    innesco: 'colonna-mex', azione: 'whatsapp-cliente', attivo: false,
+    testo: 'Buongiorno {nome}, sono {consulente} di Forte Immobiliare. ' +
+      'Ho ricevuto la sua richiesta{immobile} e la richiamo al più presto.'
+  }
+];
+
+async function scenariEsistenti() {
+  const quanti = await Scenario.countDocuments();
+  if (!quanti) await Scenario.insertMany(SCENARI_DI_PARTENZA);
+  return Scenario.find({}).sort({ createdAt: 1 });
+}
+
+app.get('/api/scenari', async (req, res) => {
+  try { res.status(200).json(await scenariEsistenti()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/scenari', async (req, res) => {
+  try { res.status(201).json(await Scenario.create(req.body || {})); }
+  catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.put('/api/scenari/:id', async (req, res) => {
+  try {
+    const s = await Scenario.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
+    if (!s) return res.status(404).json({ error: 'Scenario non trovato' });
+    res.status(200).json(s);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+app.delete('/api/scenari/:id', async (req, res) => {
+  try {
+    await Scenario.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Cosa manca perche' funzioni. Un'automazione accesa che non puo' partire e'
+   peggio di una spenta: sembra a posto e non lo e'. */
+app.get('/api/scenari/diagnosi', async (req, res) => {
+  try {
+    const scenari = await scenariEsistenti();
+    const consulenti = await Consulente.find({});
+    const esito = [];
+
+    for (const s of scenari) {
+      const problemi = [];
+
+      if (s.azione === 'telegram-consulente') {
+        if (!process.env.TELEGRAM_BOT_TOKEN) {
+          problemi.push('Manca TELEGRAM_BOT_TOKEN fra le variabili su Render');
+        }
+        const senza = consulenti.filter(c => c.utente && !c.idTelegram);
+        if (senza.length === consulenti.length && consulenti.length) {
+          problemi.push('Nessun consulente ha la casella Telegram nella sua scheda');
+        } else if (senza.length) {
+          problemi.push('Senza casella Telegram: ' +
+            senza.map(c => c.nomeCognome || c.utente).join(', '));
+        }
+      }
+
+      if (s.azione === 'whatsapp-cliente') {
+        if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
+          problemi.push('Mancano le chiavi Twilio fra le variabili su Render');
+        }
+        if (!process.env.TWILIO_NUMERO_WHATSAPP) {
+          problemi.push('Manca TWILIO_NUMERO_WHATSAPP');
+        }
+        problemi.push('WhatsApp vuole un template approvato da Meta per scrivere per primo');
+      }
+
+      if (!s.testo || !s.testo.trim()) problemi.push('Il testo del messaggio è vuoto');
+
+      esito.push({
+        id: String(s._id), nome: s.nome, attivo: s.attivo,
+        puoPartire: problemi.length === 0, problemi
+      });
+    }
+    res.status(200).json(esito);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Esegue uno scenario su una riga. Un posto solo, cosi' il comportamento e'
+   identico che parta da solo o a comando. */
+async function eseguiScenario(scenario, riga, forzato) {
+  const segna = async (esito, motivo) => {
+    scenario.ultimoAvvio = new Date();
+    scenario.ultimoEsito = esito;
+    scenario.ultimoMotivo = String(motivo || '').slice(0, 300);
+    scenario.quanteVolte = (scenario.quanteVolte || 0) + 1;
+    if (esito === 'errore') scenario.quantiErrori = (scenario.quantiErrori || 0) + 1;
+    try { await scenario.save(); } catch (e) {}
+    await segnaNelDiario('scenari', esito, scenario.nome, motivo, riga.nome || '');
+  };
+
+  if (!scenario.attivo && !forzato) return { spento: true };
+
+  const scheda = riga.consulente ? await Consulente.findOne({ utente: riga.consulente }) : null;
+
+  if (scenario.azione === 'telegram-consulente') {
+    if (riga.tgInviatoIl) return { gia: true };
+    const testo = riempi(scenario.testo, {
+      nome: riga.nome || '',
+      telefono: riga.telefonoCliente || riga.emailCliente || 'nessun recapito',
+      immobile: riga.riferimentoImmobile || '',
+      portale: riga.portaleOrigine || riga.tipoRichiesta || '',
+      messaggio: String(riga.messaggioCliente || '').slice(0, 300),
+      consulente: (scheda && scheda.nomeCognome) || ''
+    });
+    try {
+      if (!scheda) throw new Error('la riga non è assegnata a nessun consulente');
+      if (!scheda.idTelegram) {
+        throw new Error('manca la casella Telegram di ' + (scheda.nomeCognome || riga.consulente));
+      }
+      await mandaTelegram(scheda.idTelegram, testo);
+      riga.tgConsInviato = 'Inviato';
+      riga.tgInviatoIl = new Date();
+      await riga.save();
+      await segna('ok', 'avvisato ' + (scheda.nomeCognome || riga.consulente));
+      return { fatto: true };
+    } catch (e) {
+      riga.tgConsInviato = 'Non inviato';
+      try { await riga.save(); } catch (x) {}
+      await segna('errore', e.message);
+      return { errore: e.message };
+    }
+  }
+
+  if (scenario.azione === 'whatsapp-cliente') {
+    if (riga.mexInviatoIl) return { gia: true };
+    if (!riga.telefonoCliente) {
+      await segna('errore', 'il cliente non ha lasciato un numero');
+      return { errore: 'nessun numero' };
+    }
+    const testo = riempi(scenario.testo, {
+      nome: String(riga.nome || '').trim().split(/\s+/).slice(-1)[0] || '',
+      consulente: (scheda && scheda.nomeCognome) || 'Forte Immobiliare',
+      immobile: riga.riferimentoImmobile ? ' per ' + riga.riferimentoImmobile : ''
+    });
+    try {
+      await mandaWhatsapp(riga.telefonoCliente, testo);
+      riga.mexClienteInviato = 'Inviato';
+      riga.mexInviatoIl = new Date();
+      await riga.save();
+      await segna('ok', 'scritto a ' + riga.telefonoCliente);
+      return { fatto: true };
+    } catch (e) {
+      riga.mexClienteInviato = 'Non inviato';
+      try { await riga.save(); } catch (x) {}
+      await segna('errore', e.message);
+      return { errore: e.message };
+    }
+  }
+
+  return { sconosciuta: true };
+}
+
+/* Chi deve partire per questo innesco */
+async function scenariPerInnesco(innesco) {
+  return Scenario.find({ innesco });
+}
+
+/* A comando, per provare senza aspettare */
+app.post('/api/scenari/:id/prova/:idRiga', async (req, res) => {
+  try {
+    const scenario = await Scenario.findById(req.params.id);
+    const riga = await Centralino.findById(req.params.idRiga);
+    if (!scenario || !riga) return res.status(404).json({ error: 'Non trovato' });
+    /* si azzerano i segni, altrimenti crederebbe di averlo gia' fatto */
+    riga.tgInviatoIl = null; riga.mexInviatoIl = null;
+    res.status(200).json(await eseguiScenario(scenario, riga, true));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
