@@ -1441,6 +1441,8 @@ Rispondi SOLO con un oggetto JSON valido: {"nomi": ["nome1", "nome2"]}`;
          esiste piu', quota finita. Riportarlo evita di tirare a indovinare. */
       if (dati.error) {
         console.error('Lettura rifiutata:', JSON.stringify(dati.error).slice(0, 400));
+        await segnaNelDiario('gemini', 'errore', 'lettura pulsantiera',
+          dati.error.message, messaggio || '');
         return res.status(502).json({
           error: dati.error.message || 'Il modello ha rifiutato la richiesta',
           modello: GEMINI_MODEL,
@@ -1463,8 +1465,16 @@ Rispondi SOLO con un oggetto JSON valido: {"nomi": ["nome1", "nome2"]}`;
 
       let estratto;
       try { estratto = JSON.parse(testo); }
-      catch (e) { return res.status(502).json({ error: 'Il modello ha risposto in un formato inatteso' }); }
-      return res.status(200).json({ nomi: (estratto.nomi || []).filter(n => String(n).trim()) });
+      catch (e) {
+        await segnaNelDiario('gemini', 'errore', 'lettura pulsantiera',
+          'risposta in formato inatteso', messaggio || '');
+        return res.status(502).json({ error: 'Il modello ha risposto in un formato inatteso' });
+      }
+      const nomiLetti = (estratto.nomi || []).filter(n => String(n).trim());
+      await segnaNelDiario('gemini', nomiLetti.length ? 'ok' : 'scartato', 'lettura pulsantiera',
+        nomiLetti.length ? nomiLetti.length + ' nomi letti' : 'nessun nome riconosciuto',
+        messaggio || '');
+      return res.status(200).json({ nomi: nomiLetti });
     }
 
     const promptEstrazione = `Guarda questa foto di una targa/bussola citofonica di un condominio. Estrai TUTTI i nomi
@@ -3115,6 +3125,142 @@ const AppuntamentoSchema = new mongoose.Schema({
 const Appuntamento = mongoose.model('Appuntamento', AppuntamentoSchema);
 registraRotteScheda('appuntamenti', Appuntamento);
 
+/* ==========================================================================
+   IL DIARIO DELLE CONNESSIONI
+   Un'automazione che gira sul server e' invisibile finche' non si rompe, e
+   quando si rompe non lo scopri con un errore: lo scopri fra tre settimane
+   accorgendoti che non arrivano piu' lead. Ogni cosa che il server fa da solo
+   lascia una riga qui.
+========================================================================== */
+const DiarioSchema = new mongoose.Schema({
+  servizio: { type: String, default: '' },    // gmail, meta, gemini, immagini
+  esito: { type: String, default: 'ok' },     // ok | scartato | errore
+  cosa: { type: String, default: '' },        // che operazione era
+  dettaglio: { type: String, default: '' },   // il messaggio di errore, o cosa e' stato creato
+  origine: { type: String, default: '' },     // il mittente, il portale
+  quando: { type: Date, default: Date.now }
+}, { timestamps: true });
+
+DiarioSchema.index({ quando: -1 });
+const Diario = mongoose.model('Diario', DiarioSchema);
+
+/* Scrive nel diario senza far fallire l'operazione se il diario stesso ha un
+   problema: e' un registro, non un pezzo del lavoro */
+async function segnaNelDiario(servizio, esito, cosa, dettaglio, origine) {
+  try {
+    await Diario.create({
+      servizio, esito, cosa,
+      dettaglio: String(dettaglio || '').slice(0, 500),
+      origine: origine || ''
+    });
+  } catch (e) { console.error('Diario non scritto:', e.message); }
+}
+
+/* Lo stato di tutto: cosa e' configurato, e soprattutto quando ha funzionato
+   l'ultima volta. Un pallino verde dice poco; "ultima mail letta 12 minuti fa"
+   dice tutto. */
+app.get('/api/connessioni/stato', async (req, res) => {
+  try {
+    const servizi = [
+      { chiave: 'gemini',   nome: 'Gemini (testi e foto)', chiave_env: !!GEMINI_API_KEY,
+        variabile: 'GEMINI_API_KEY' },
+      { chiave: 'meta',     nome: 'Meta (Facebook e Instagram)',
+        chiave_env: !!(process.env.META_APP_ID && process.env.META_APP_SECRET),
+        variabile: 'META_APP_ID e META_APP_SECRET' },
+      { chiave: 'immagini', nome: 'Ritocco immagini',
+        chiave_env: !!(process.env.FAL_API_KEY || process.env.OPENAI_API_KEY),
+        variabile: 'FAL_API_KEY oppure OPENAI_API_KEY' },
+      { chiave: 'gmail',    nome: 'Lettura mail (lead)',
+        chiave_env: !!process.env.GMAIL_REFRESH_TOKEN,
+        variabile: 'GMAIL_REFRESH_TOKEN' }
+    ];
+
+    const risultato = [];
+    for (const s of servizi) {
+      const ultimo = await Diario.findOne({ servizio: s.chiave }).sort({ quando: -1 });
+      const ultimoOk = await Diario.findOne({ servizio: s.chiave, esito: 'ok' }).sort({ quando: -1 });
+      const erroriRecenti = await Diario.countDocuments({
+        servizio: s.chiave, esito: 'errore',
+        quando: { $gte: new Date(Date.now() - 24 * 3600 * 1000) }
+      });
+
+      risultato.push({
+        chiave: s.chiave, nome: s.nome,
+        configurato: s.chiave_env, variabile: s.variabile,
+        ultimoUso: ultimo ? ultimo.quando : null,
+        ultimoBuono: ultimoOk ? ultimoOk.quando : null,
+        ultimoErrore: ultimo && ultimo.esito === 'errore' ? ultimo.dettaglio : '',
+        erroriOggi: erroriRecenti
+      });
+    }
+    res.status(200).json(risultato);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Le ultime righe del diario: e' qui che si vede se un portale ha cambiato
+   formato — cominciano a comparire "non riconosciuta" tutte insieme. */
+app.get('/api/connessioni/diario', async (req, res) => {
+  try {
+    const quante = Math.min(Number(req.query.quante) || 60, 200);
+    const filtro = {};
+    if (req.query.servizio) filtro.servizio = req.query.servizio;
+    if (req.query.esito) filtro.esito = req.query.esito;
+    const righe = await Diario.find(filtro).sort({ quando: -1 }).limit(quante);
+    res.status(200).json(righe);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Una prova a comando: invece di aspettare che qualcosa si rompa da solo */
+app.post('/api/connessioni/prova/:servizio', async (req, res) => {
+  const servizio = req.params.servizio;
+  try {
+    if (servizio === 'gemini') {
+      if (!GEMINI_API_KEY) {
+        await segnaNelDiario('gemini', 'errore', 'prova', 'chiave non configurata');
+        return res.status(200).json({ funziona: false, motivo: 'GEMINI_API_KEY non configurata su Render' });
+      }
+      const elenco = await new Promise((risolvi, rifiuta) => {
+        https.get({
+          hostname: 'generativelanguage.googleapis.com',
+          path: `/v1beta/models?key=${GEMINI_API_KEY}`
+        }, (r) => { let d = ''; r.on('data', p => d += p); r.on('end', () => risolvi(d)); }).on('error', rifiuta);
+      });
+      const dati = JSON.parse(elenco);
+      if (dati.error) {
+        await segnaNelDiario('gemini', 'errore', 'prova', dati.error.message);
+        return res.status(200).json({ funziona: false, motivo: dati.error.message });
+      }
+      const nomi = (dati.models || []).map(m => String(m.name || '').replace('models/', ''));
+      const esiste = nomi.indexOf(GEMINI_MODEL) >= 0;
+      await segnaNelDiario('gemini', esiste ? 'ok' : 'errore', 'prova',
+        esiste ? 'modello ' + GEMINI_MODEL + ' disponibile' : 'il modello ' + GEMINI_MODEL + ' non esiste piu');
+      return res.status(200).json({
+        funziona: esiste, modello: GEMINI_MODEL,
+        motivo: esiste ? 'tutto a posto' : 'il modello impostato non è fra quelli disponibili',
+        disponibili: nomi.filter(n => /flash|pro/.test(n)).slice(0, 10)
+      });
+    }
+
+    if (servizio === 'meta') {
+      const c = await ConnessioneSocial.findOne({ canale: 'facebook' });
+      const configurato = !!(process.env.META_APP_ID && process.env.META_APP_SECRET);
+      const collegato = !!(c && c.tokenAccesso);
+      await segnaNelDiario('meta', collegato ? 'ok' : 'errore', 'prova',
+        collegato ? 'pagina collegata' : (configurato ? 'app configurata ma nessuna pagina collegata' : 'chiavi mancanti'));
+      return res.status(200).json({
+        funziona: collegato, configurato,
+        motivo: collegato ? 'collegato' : (configurato ? 'manca il collegamento alla pagina' : 'META_APP_ID e META_APP_SECRET non configurate')
+      });
+    }
+
+    await segnaNelDiario(servizio, 'errore', 'prova', 'servizio sconosciuto');
+    res.status(200).json({ funziona: false, motivo: 'Non so ancora provare questo servizio' });
+  } catch (err) {
+    await segnaNelDiario(servizio, 'errore', 'prova', err.message);
+    res.status(200).json({ funziona: false, motivo: err.message });
+  }
+});
+
 /* Gli amministratori gia' noti, per il menu a discesa */
 app.get('/api/pubblico/amministratori', async (req, res) => {
   try {
@@ -3679,6 +3825,8 @@ async function pubblicaSuCanale(canale, testo, immagine) {
 }
 
 app.post('/api/social/pubblica', async (req, res) => {
+  /* ogni pubblicazione lascia una riga: e' l'unico modo per accorgersi che
+     un canale ha smesso di funzionare senza controllarlo a mano */
   try {
     const { idPost, canale, testo, immagine } = req.body || {};
     if (!canale) return res.status(400).json({ error: 'Manca il canale' });
