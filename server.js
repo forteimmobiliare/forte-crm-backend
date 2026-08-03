@@ -4119,9 +4119,7 @@ async function avvisaPerRigaCentralino(riga, forzato) {
   const impostazioni = await impostazioniLead();
   if (!impostazioni.attiva && !forzato) return { spenta: true };
 
-  const scheda = riga.consulente
-    ? await Consulente.findOne({ utente: riga.consulente })
-    : null;
+const scheda = await schedaDelConsulente(riga.consulente);
 
   const esiti = {};
 
@@ -4333,6 +4331,103 @@ app.get('/api/scenari/diagnosi', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+/* Il consulente di una riga. Il CRM salva lo username, ma le righe piu'
+   vecchie — e quelle arrivate da fuori — hanno il nome per esteso: cercare
+   solo per username le lascia senza destinatario, e il messaggio non parte
+   senza che si capisca perche'. */
+async function schedaDelConsulente(valore) {
+  const grezzo = String(valore || '').trim();
+  if (!grezzo) return null;
+
+  let scheda = await Consulente.findOne({ utente: grezzo });
+  if (scheda) return scheda;
+
+  /* per nome, senza badare a maiuscole e spazi doppi */
+  const pulito = grezzo.replace(/\s+/g, ' ');
+  const senzaCaratteriStrani = pulito.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  scheda = await Consulente.findOne({
+    nomeCognome: new RegExp('^\\s*' + senzaCaratteriStrani + '\\s*$', 'i')
+  });
+  if (scheda) return scheda;
+
+  /* ultimo tentativo: username scritto con altre maiuscole */
+  return Consulente.findOne({ utente: new RegExp('^\\s*' + senzaCaratteriStrani + '\\s*$', 'i') });
+}
+
+/* Perche' non e' partito. Prende una riga vera e racconta ogni passaggio,
+   senza mandare niente: e' l'unico modo di rispondere a "non parte" con un
+   fatto invece che con un'ipotesi. */
+app.get('/api/scenari/perche/:idRiga', async (req, res) => {
+  const passi = [];
+  const dì = (esito, cosa) => passi.push({ esito, cosa });
+
+  try {
+    const riga = await Centralino.findById(req.params.idRiga);
+    if (!riga) return res.status(200).json({ passi: [{ esito: 'no', cosa: 'Riga non trovata' }] });
+
+    dì('sì', `Riga: ${riga.nome || '(senza nome)'}`);
+    dì(riga.tgConsInviato === 'Inviato' ? 'sì' : 'no',
+      `La colonna "Tg Cons Inviato" vale: ${riga.tgConsInviato || '(vuota)'}`);
+    dì(riga.tgInviatoIl ? 'no' : 'sì',
+      riga.tgInviatoIl
+        ? `Già inviato il ${new Date(riga.tgInviatoIl).toLocaleString('it-IT')} — non riparte`
+        : 'Non è ancora stato inviato');
+
+    const scenari = await Scenario.find({ innesco: 'colonna-tg' });
+    dì(scenari.length ? 'sì' : 'no',
+      scenari.length
+        ? `${scenari.length} scenario/i sull'innesco "colonna-tg": ${scenari.map(s => s.nome).join(', ')}`
+        : 'Nessuno scenario parte quando quella colonna cambia');
+
+    for (const s of scenari) {
+      dì(s.attivo ? 'sì' : 'no', `"${s.nome}" è ${s.attivo ? 'acceso' : 'spento'}`);
+      if (s.azione !== 'telegram-consulente') continue;
+
+      dì(process.env.TELEGRAM_BOT_TOKEN ? 'sì' : 'no',
+        process.env.TELEGRAM_BOT_TOKEN
+          ? 'TELEGRAM_BOT_TOKEN è configurato su Render'
+          : 'TELEGRAM_BOT_TOKEN non è configurato su Render');
+
+      dì(riga.consulente ? 'sì' : 'no',
+        riga.consulente ? `La riga è di: ${riga.consulente}` : 'La riga non è assegnata a nessun consulente');
+
+      if (riga.consulente) {
+        const scheda = await schedaDelConsulente(riga.consulente);
+        dì(scheda ? 'sì' : 'no',
+          scheda ? `Scheda trovata: ${scheda.nomeCognome || riga.consulente}`
+                 : `Nessuna scheda per l'utente "${riga.consulente}"`);
+        if (scheda) {
+          dì(scheda.idTelegram ? 'sì' : 'no',
+            scheda.idTelegram
+              ? `Casella Telegram: ${scheda.idTelegram}`
+              : `${scheda.nomeCognome || riga.consulente} non ha la casella Telegram nella sua scheda`);
+        }
+      }
+      dì(s.testo && s.testo.trim() ? 'sì' : 'no',
+        s.testo && s.testo.trim() ? 'Il testo del messaggio c\'è' : 'Il testo del messaggio è vuoto');
+    }
+
+    const bloccanti = passi.filter(p => p.esito === 'no');
+    res.status(200).json({
+      passi,
+      conclusione: bloccanti.length
+        ? bloccanti[0].cosa
+        : 'Tutto a posto: rimettendo la colonna su Inviato dovrebbe partire'
+    });
+  } catch (err) {
+    res.status(200).json({ passi, conclusione: 'Errore nel controllo: ' + err.message });
+  }
+});
+
+/* Le ultime righe del Registro Chiamate, per scegliere su quale indagare */
+app.get('/api/scenari/righe-recenti', async (req, res) => {
+  try {
+    const righe = await Centralino.find({}).sort({ createdAt: -1 }).limit(10)
+      .select('nome telefonoCliente consulente tgConsInviato tgInviatoIl createdAt');
+    res.status(200).json(righe);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* Esegue uno scenario su una riga. Un posto solo, cosi' il comportamento e'
    identico che parta da solo o a comando. */
 async function eseguiScenario(scenario, riga, forzato) {
@@ -4348,7 +4443,7 @@ async function eseguiScenario(scenario, riga, forzato) {
 
   if (!scenario.attivo && !forzato) return { spento: true };
 
-  const scheda = riga.consulente ? await Consulente.findOne({ utente: riga.consulente }) : null;
+  const scheda = await schedaDelConsulente(riga.consulente);
 
   if (scenario.azione === 'telegram-consulente') {
     if (riga.tgInviatoIl) return { gia: true };
