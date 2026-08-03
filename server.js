@@ -3658,10 +3658,32 @@ async function mandaTelegram(chatId, testo) {
 
 /* Sostituisce i segnaposto nel testo */
 function riempi(modello, dati) {
-  return String(modello || '').replace(/\{(\w+)\}/g, (tutto, campo) => {
-    const v = dati[campo];
-    return v === undefined || v === null ? '' : String(v);
-  }).replace(/\n{3,}/g, '\n\n').trim();
+  /* Riga per riga: si tiene traccia di quali segnaposto c'erano e se sono
+     rimasti vuoti. Cercare "righe senza lettere" era troppo furbo e sbagliava
+     — mangiava i numeri di telefono, che di lettere non ne hanno. */
+  return String(modello || '').split('\n').map(riga => {
+    const segnaposto = riga.match(/\{(\w+)\}/g) || [];
+    const riempita = riga.replace(/\{(\w+)\}/g, (tutto, campo) => {
+      const v = dati[campo];
+      return v === undefined || v === null ? '' : String(v);
+    });
+
+    /* la riga aveva dei segnaposto ed erano tutti vuoti: e' una riga che non
+       dice niente, tipo "✉️" da solo. Si toglie. */
+    if (segnaposto.length) {
+      const tuttiVuoti = segnaposto.every(s => {
+        const campo = s.slice(1, -1);
+        const v = dati[campo];
+        return v === undefined || v === null || String(v).trim() === '';
+      });
+      if (tuttiVuoti) return null;
+    }
+    return riempita;
+  })
+  .filter(r => r !== null)
+  .join('\n')
+  .replace(/\n{3,}/g, '\n\n')
+  .trim();
 }
 
 
@@ -4235,7 +4257,7 @@ const SCENARI_DI_PARTENZA = [
   {
     nome: 'Avvisa il consulente su Telegram',
     innesco: 'colonna-tg', azione: 'telegram-consulente', attivo: false,
-    testo: '🔔 Nuova richiesta\n\n{nome}\n{telefono}\n{immobile}\n\n{messaggio}'
+    testo: '🔔 Nuova richiesta\n\n👤 {nome}\n📞 {telefono}\n✉️ {mail}\n🏠 {immobile}\n\n{messaggio}'
   },
   {
     nome: 'Scrivi al cliente su WhatsApp',
@@ -4617,12 +4639,31 @@ async function mandaAvvisoTelegram(riga) {
     const scenario = await Scenario.findOne({ azione: 'telegram-consulente' });
     const modello = (scenario && scenario.testo && scenario.testo.trim())
       ? scenario.testo
-      : '🔔 Nuova richiesta\n\n{nome}\n{telefono}\n{immobile}\n\n{messaggio}';
+      : '🔔 Nuova richiesta\n\n👤 {nome}\n📞 {telefono}\n✉️ {mail}\n🏠 {immobile}\n\n{messaggio}';
+
+    /* L'immobile: il campo sulla riga spesso e' vuoto perche' il collegamento
+       e' all'incarico, non al testo. Lo prendo da li' e uso il campo della
+       riga solo come ripiego — altrimenti la riga del messaggio resta vuota
+       proprio quando serve di piu'. */
+    let nomeImmobile = '';
+    let riferimento = '';
+    if (riga.incaricoCollegatoId) {
+      const suo = await Incarico.findById(riga.incaricoCollegatoId).catch(() => null);
+      if (suo) {
+        nomeImmobile = suo.nome || '';
+        riferimento = suo.idElemento || '';
+      }
+    }
+    if (!nomeImmobile) nomeImmobile = riga.riferimentoImmobile || '';
+
+    const descrizioneImmobile = [riferimento, nomeImmobile]
+      .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ');
 
     const testo = riempi(modello, {
       nome: riga.nome || '',
-      telefono: riga.telefonoCliente || riga.emailCliente || 'nessun recapito',
-      immobile: riga.riferimentoImmobile || '',
+      telefono: riga.telefonoCliente || 'nessun numero',
+      mail: riga.emailCliente || '',
+      immobile: descrizioneImmobile,
       portale: riga.portaleOrigine || riga.tipoRichiesta || '',
       messaggio: String(riga.messaggioCliente || '').slice(0, 300),
       consulente: destinatario.nomeCognome || ''
