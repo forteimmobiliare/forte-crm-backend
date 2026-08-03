@@ -364,6 +364,26 @@ const CentralinoSchema = new mongoose.Schema({
   tgConsInviato: { type: String, default: '' },
   mexClienteInviato: { type: String, default: '' }
 }, { timestamps: true });
+/* L'automazione parte quando la riga nasce, da qualunque parte arrivi: dal
+   modulo del telefono, da una mail, o scritta a mano. I ganci vanno messi
+   prima che il modello nasca, altrimenti mongoose non li vede. Le funzioni
+   che servono sono definite piu' avanti nel file: vengono chiamate dentro
+   setImmediate, quindi a quel punto ci sono gia'. */
+CentralinoSchema.pre('save', function (next) {
+  this.eraNuova = this.isNew;
+  next();
+});
+
+CentralinoSchema.post('save', function (documento) {
+  if (!documento.eraNuova) return;
+  setImmediate(() => {
+    try {
+      avvisaPerRigaCentralino(documento).catch(err =>
+        console.error('Automazione centralino non riuscita:', err.message));
+    } catch (e) { console.error('Automazione centralino non partita:', e.message); }
+  });
+});
+
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
 
 /* ==========================================
@@ -3763,55 +3783,13 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail) {
     (letto.comeLetta === 'gemini' ? ' (letta da Gemini)' : ''),
     letto.nomePortale || mittente || '');
 
-  const esiti = { id: String(riga._id), letto, whatsapp: null, telegram: null };
-
-  /* il messaggio al cliente */
-  if (impostazioni.attiva && impostazioni.mandaWhatsapp && letto.telefono) {
-    const scheda = await Consulente.findOne({ utente: destinazione.consulente });
-    const testoMsg = riempi(impostazioni.messaggioCliente, {
-      nome: String(letto.nome).split(' ')[0],
-      consulente: (scheda && scheda.nomeCognome) || 'Forte Immobiliare',
-      immobile: destinazione.immobile ? ' per ' + destinazione.immobile : ''
-    });
-    try {
-      await mandaWhatsapp(letto.telefono, testoMsg);
-      esiti.whatsapp = 'inviato';
-      await segnaNelDiario('twilio', 'ok', 'messaggio al cliente', letto.nome, letto.telefono);
-    } catch (e) {
-      esiti.whatsapp = 'fallito: ' + e.message;
-      await segnaNelDiario('twilio', 'errore', 'messaggio al cliente', e.message, letto.telefono);
-    }
-  }
-
-  /* la notifica al consulente. La casella Telegram sta nella sua scheda,
-     insieme a telefono e mail: un elenco separato andrebbe tenuto allineato
-     a mano, e prima o poi non lo sarebbe piu'. */
-  if (impostazioni.attiva && impostazioni.mandaTelegram) {
-    const scheda = await Consulente.findOne({ utente: destinazione.consulente });
-    const casella = (scheda && scheda.idTelegram) || '';
-    const testoTg = riempi(impostazioni.testoTelegram, {
-      portale: letto.nomePortale || 'una mail',
-      nome: letto.nome,
-      telefono: letto.telefono || letto.mail || 'nessun recapito',
-      immobile: destinazione.immobile || '',
-      messaggio: String(letto.messaggio || '').slice(0, 300)
-    });
-    try {
-      if (!casella) throw new Error('manca la casella Telegram di ' +
-        (destinazione.consulente || 'questo consulente') + ': mettila nella sua scheda');
-      await mandaTelegram(casella, testoTg);
-      esiti.telegram = 'inviato';
-      await segnaNelDiario('telegram', 'ok', 'notifica al consulente',
-        destinazione.consulente || 'nessuno', letto.nome);
-    } catch (e) {
-      esiti.telegram = 'fallito: ' + e.message;
-      await segnaNelDiario('telegram', 'errore', 'notifica al consulente', e.message,
-        destinazione.consulente || '');
-    }
-  }
-
-  return esiti;
+  /* il messaggio al cliente e la notifica partono dal gancio sulla riga
+     appena creata: cosi' il comportamento e' identico che la riga nasca da
+     una mail, dal modulo del telefono o scritta a mano */
+  return { id: String(riga._id), letto };
 }
+
+
 
 /* Per provare senza aspettare una mail vera: si incolla il testo e si vede
    cosa ne esce, senza mandare niente a nessuno. */
@@ -4105,6 +4083,99 @@ setInterval(async () => {
     if (scaduta) await accendiSorveglianza();
   } catch (e) {}
 }, 6 * 3600 * 1000);
+
+
+/* ==========================================================================
+   L'AUTOMAZIONE SULLE RIGHE DEL CENTRALINO
+   Parte quando nasce una riga, da qualunque parte arrivi: dal modulo del
+   telefono, da una mail, o scritta a mano nel CRM. Un solo punto vuol dire
+   un solo comportamento — e un solo posto da correggere.
+========================================================================== */
+
+async function avvisaPerRigaCentralino(riga) {
+  const impostazioni = await impostazioniLead();
+  if (!impostazioni.attiva) return { spenta: true };
+
+  /* gia' avvisato: succede quando la stessa riga viene salvata due volte */
+  if (riga.tgConsInviato === 'Inviato' && riga.mexClienteInviato === 'Inviato') {
+    return { gia: true };
+  }
+
+  const scheda = riga.consulente
+    ? await Consulente.findOne({ utente: riga.consulente })
+    : null;
+
+  const esiti = {};
+
+  /* la notifica al consulente */
+  if (impostazioni.mandaTelegram && riga.tgConsInviato !== 'Inviato') {
+    const testo = riempi(impostazioni.testoTelegram, {
+      portale: riga.portaleOrigine || riga.tipoRichiesta || 'Centralino',
+      nome: riga.nome || '',
+      telefono: riga.telefonoCliente || riga.emailCliente || 'nessun recapito',
+      immobile: riga.riferimentoImmobile || '',
+      messaggio: String(riga.messaggioCliente || '').slice(0, 300)
+    });
+
+    try {
+      if (!scheda) throw new Error('la riga non è assegnata a nessun consulente');
+      if (!scheda.idTelegram) {
+        throw new Error('manca la casella Telegram di ' + (scheda.nomeCognome || riga.consulente));
+      }
+      await mandaTelegram(scheda.idTelegram, testo);
+      riga.tgConsInviato = 'Inviato';
+      esiti.telegram = 'inviato';
+      await segnaNelDiario('telegram', 'ok', 'avviso al consulente',
+        (scheda.nomeCognome || riga.consulente) + ' · ' + (riga.nome || ''), riga.portaleOrigine || '');
+    } catch (e) {
+      riga.tgConsInviato = 'Non inviato';
+      esiti.telegram = e.message;
+      await segnaNelDiario('telegram', 'errore', 'avviso al consulente', e.message, riga.nome || '');
+    }
+  }
+
+  /* il messaggio al cliente */
+  if (impostazioni.mandaWhatsapp && riga.mexClienteInviato !== 'Inviato' && riga.telefonoCliente) {
+    const testo = riempi(impostazioni.messaggioCliente, {
+      /* "Ferrari Marica" arriva col cognome davanti: al cliente si scrive
+         col nome di battesimo, che e' l'ultima parola */
+      nome: String(riga.nome || '').trim().split(/\s+/).slice(-1)[0] || '',
+      consulente: (scheda && scheda.nomeCognome) || 'Forte Immobiliare',
+      immobile: riga.riferimentoImmobile ? ' per ' + riga.riferimentoImmobile : ''
+    });
+
+    try {
+      await mandaWhatsapp(riga.telefonoCliente, testo);
+      riga.mexClienteInviato = 'Inviato';
+      esiti.whatsapp = 'inviato';
+      await segnaNelDiario('whatsapp', 'ok', 'messaggio al cliente',
+        riga.nome || '', riga.telefonoCliente);
+    } catch (e) {
+      riga.mexClienteInviato = 'Non inviato';
+      esiti.whatsapp = e.message;
+      await segnaNelDiario('whatsapp', 'errore', 'messaggio al cliente', e.message, riga.telefonoCliente);
+    }
+  }
+
+  /* i due campi in tabella dicono cosa e' partito e cosa no: si vede dal
+     CRM senza aprire il diario */
+  try { await riga.save(); } catch (e) {}
+  return esiti;
+}
+
+/* A mano, per rimandare quello che non e' partito */
+app.post('/api/centralino/:id/riavvisa', async (req, res) => {
+  try {
+    const riga = await Centralino.findById(req.params.id);
+    if (!riga) return res.status(404).json({ error: 'Riga non trovata' });
+    /* si azzerano gli stati, altrimenti si crederebbe gia' fatto */
+    if (req.body && req.body.rifai) {
+      riga.tgConsInviato = ''; riga.mexClienteInviato = '';
+    }
+    const esiti = await avvisaPerRigaCentralino(riga);
+    res.status(200).json(esiti);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 /* Gli amministratori gia' noti, per il menu a discesa */
 app.get('/api/pubblico/amministratori', async (req, res) => {
