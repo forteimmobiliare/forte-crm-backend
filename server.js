@@ -3261,6 +3261,65 @@ app.post('/api/connessioni/prova/:servizio', async (req, res) => {
   }
 });
 
+/* Le chiamate annotate dal telefono, mentre si e' ancora in linea. La rotta
+   e' pubblica come le altre del campo: serve poterla aprire senza accedere,
+   perche' con un cliente all'orecchio nessuno fa il login. */
+app.post('/api/pubblico/chiamata', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const nome = String(b.nome || '').trim();
+    if (!nome) return res.status(400).json({ error: 'Serve almeno il nome' });
+
+    const creata = await Centralino.create({
+      nome,
+      telefonoCliente: String(b.telefono || '').trim(),
+      emailCliente: String(b.email || '').trim(),
+      messaggioCliente: String(b.note || b.cosaVoleva || '').trim(),
+      tipoRichiesta: b.tipo || 'Richiesta Generica',
+      consulente: String(b.consulente || '').trim(),
+      stato: 'Da Fare',
+      riferimentoImmobile: String(b.immobile || '').trim(),
+      incaricoCollegatoId: String(b.immobileId || '').trim()
+    });
+
+    await segnaNelDiario('chiamate', 'ok', 'chiamata annotata',
+      nome + (b.telefono ? ' · ' + b.telefono : ''), b.consulente || '');
+
+    res.status(201).json({ status: 'success', id: String(creata._id) });
+  } catch (err) {
+    await segnaNelDiario('chiamate', 'errore', 'chiamata annotata', err.message, '');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* Gli immobili in vendita, per la tendina: solo quelli vivi, perche' chi
+   chiama non chiede di una casa venduta l'anno scorso */
+app.get('/api/pubblico/immobili-attivi', async (req, res) => {
+  try {
+    const righe = await Incarico.find({
+      statoImmobile: { $nin: ['Archiviato', 'Venduto', 'Ritirato'] }
+    }).sort({ nome: 1 }).limit(300).select('nome idElemento posizione statoImmobile');
+
+    res.status(200).json(righe.map(r => ({
+      id: String(r._id),
+      nome: r.nome || r.idElemento || '',
+      riferimento: r.idElemento || '',
+      dove: r.posizione || ''
+    })).filter(r => r.nome));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Le ultime annotate: se richiama la stessa persona la riconosci invece di
+   riscriverla da capo */
+app.get('/api/pubblico/chiamate-recenti', async (req, res) => {
+  try {
+    const righe = await Centralino.find({ tipoRichiesta: 'Chiamata' })
+      .sort({ createdAt: -1 }).limit(12)
+      .select('nome telefonoCliente messaggioCliente stato createdAt');
+    res.status(200).json(righe);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 /* Gli amministratori gia' noti, per il menu a discesa */
 app.get('/api/pubblico/amministratori', async (req, res) => {
   try {
@@ -4563,4 +4622,3 @@ app.put('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
-  
