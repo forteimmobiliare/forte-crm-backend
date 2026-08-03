@@ -1251,31 +1251,24 @@ app.put('/api/centralino/:id', async (req, res) => {
     const aggiornato = await Centralino.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
     if (!aggiornato) return res.status(404).json({ error: 'Chiamata non trovata' });
 
-    /* Il grilletto: mettendo la colonna "Tg Cons Inviato" su Inviato, il
-       messaggio parte davvero. E' il modo in cui funzionava lo scenario su
-       Make, e permette di sceglierlo riga per riga finche' non ci si fida
-       dell'automatismo. La colonna resta su Inviato anche dopo, ma il campo
-       tgInviatoIl impedisce che riparta a ogni salvataggio. */
-    /* Quale innesco ha tirato: la colonna che e' stata messa su Inviato */
-    let innesco = '';
-    if (req.body.tgConsInviato === 'Inviato' && !aggiornato.tgInviatoIl) innesco = 'colonna-tg';
-    else if (req.body.mexClienteInviato === 'Inviato' && !aggiornato.mexInviatoIl) innesco = 'colonna-mex';
+    /* Mettendo la colonna su Inviato il messaggio parte davvero.
+       Aspetto l'esito invece di rispondere subito: prima il server diceva
+       "fatto" e mandava dopo, quindi se l'invio falliva l'errore spariva e a
+       schermo non succedeva niente. Meglio un secondo di attesa che un
+       guasto invisibile. */
+    let esitoInvio = null;
 
-    if (innesco) {
-      /* rispondo subito e mando dopo: chi ha cliccato non resta fermo
-         davanti alla tabella mentre Telegram fa il suo giro */
-      res.status(200).json({ status: 'success', data: aggiornato, invioPartito: true });
-      setImmediate(async () => {
-        try {
-          const scenari = await scenariPerInnesco(innesco);
-          for (const s of scenari) await eseguiScenario(s, aggiornato, true);
-        } catch (err) { console.error('Scenario non riuscito:', err.message); }
-      });
-      return;
+    if (req.body.tgConsInviato === 'Inviato' && !aggiornato.tgInviatoIl) {
+      esitoInvio = await mandaAvvisoTelegram(aggiornato);
+    } else if (req.body.mexClienteInviato === 'Inviato' && !aggiornato.mexInviatoIl) {
+      esitoInvio = await mandaMessaggioAlCliente(aggiornato);
     }
 
-    res.status(200).json({ status: 'success', data: aggiornato });
-  } catch (err) { res.status(400).json({ error: err.message }); }
+    res.status(200).json({ status: 'success', data: aggiornato, invio: esitoInvio });
+  } catch (err) {
+    console.error('Centralino, aggiornamento fallito:', err);
+    res.status(400).json({ error: err.message });
+  }
 });
 
 app.delete('/api/centralino/svuota', async (req, res) => {
@@ -4550,6 +4543,129 @@ async function eseguiScenario(scenario, riga, forzato) {
   }
 
   return { sconosciuta: true };
+}
+
+/* L'avviso al consulente. Una funzione sola, diretta, che torna sempre un
+   esito leggibile: e' quello che mancava per capire cosa non andava. */
+async function mandaAvvisoTelegram(riga) {
+  const passi = [];
+  try {
+    if (!process.env.TELEGRAM_BOT_TOKEN) {
+      throw new Error('TELEGRAM_BOT_TOKEN non è configurato su Render');
+    }
+
+    /* Il destinatario: prima il consulente dell'incarico collegato — che e'
+       quello che si vede nella colonna ID Telegram — poi quello della riga. */
+    let destinatario = null;
+    let daDove = '';
+
+    if (riga.incaricoCollegatoId) {
+      const incarico = await Incarico.findById(riga.incaricoCollegatoId).catch(() => null);
+      if (incarico && incarico.listing) {
+        destinatario = await schedaDelConsulente(incarico.listing);
+        daDove = "dall'incarico (" + incarico.listing + ')';
+      }
+      passi.push(incarico
+        ? ('incarico: ' + (incarico.nome || incarico.idElemento) + ', listing: ' + (incarico.listing || 'nessuno'))
+        : 'incarico collegato non trovato');
+    }
+    if (!destinatario && riga.consulente) {
+      destinatario = await schedaDelConsulente(riga.consulente);
+      daDove = 'dalla riga (' + riga.consulente + ')';
+      passi.push('consulente della riga: ' + riga.consulente);
+    }
+
+    if (!destinatario) {
+      throw new Error('Non trovo il consulente a cui mandarlo. ' +
+        (riga.incaricoCollegatoId
+          ? "L'incarico collegato non ha un listing, e la riga non ha un consulente."
+          : 'La riga non ha un consulente né un immobile collegato.'));
+    }
+    if (!destinatario.idTelegram) {
+      throw new Error((destinatario.nomeCognome || destinatario.utente) +
+        ' non ha la casella Telegram nella sua scheda');
+    }
+
+    /* il testo: quello dello scenario se c'e', altrimenti uno di riserva.
+       Senza scenari configurati l'avviso deve partire lo stesso. */
+    const scenario = await Scenario.findOne({ azione: 'telegram-consulente' });
+    const modello = (scenario && scenario.testo && scenario.testo.trim())
+      ? scenario.testo
+      : '🔔 Nuova richiesta\n\n{nome}\n{telefono}\n{immobile}\n\n{messaggio}';
+
+    const testo = riempi(modello, {
+      nome: riga.nome || '',
+      telefono: riga.telefonoCliente || riga.emailCliente || 'nessun recapito',
+      immobile: riga.riferimentoImmobile || '',
+      portale: riga.portaleOrigine || riga.tipoRichiesta || '',
+      messaggio: String(riga.messaggioCliente || '').slice(0, 300),
+      consulente: destinatario.nomeCognome || ''
+    });
+
+    await mandaTelegram(destinatario.idTelegram, testo);
+
+    riga.tgConsInviato = 'Inviato';
+    riga.tgInviatoIl = new Date();
+    await riga.save();
+
+    await segnaNelDiario('telegram', 'ok', 'avviso al consulente',
+      'avvisato ' + (destinatario.nomeCognome || destinatario.utente) + ' ' + daDove, riga.nome || '');
+
+    if (scenario) {
+      scenario.ultimoAvvio = new Date(); scenario.ultimoEsito = 'ok';
+      scenario.ultimoMotivo = 'avvisato ' + (destinatario.nomeCognome || destinatario.utente);
+      scenario.quanteVolte = (scenario.quanteVolte || 0) + 1;
+      await scenario.save().catch(() => {});
+    }
+
+    return { fatto: true, a: destinatario.nomeCognome || destinatario.utente, passi };
+  } catch (e) {
+    /* la colonna torna su "Non inviato": se resta su Inviato sembra fatto */
+    riga.tgConsInviato = 'Non inviato';
+    await riga.save().catch(() => {});
+    await segnaNelDiario('telegram', 'errore', 'avviso al consulente', e.message, riga.nome || '');
+
+    const scenario = await Scenario.findOne({ azione: 'telegram-consulente' }).catch(() => null);
+    if (scenario) {
+      scenario.ultimoAvvio = new Date(); scenario.ultimoEsito = 'errore';
+      scenario.ultimoMotivo = e.message;
+      scenario.quanteVolte = (scenario.quanteVolte || 0) + 1;
+      scenario.quantiErrori = (scenario.quantiErrori || 0) + 1;
+      await scenario.save().catch(() => {});
+    }
+    return { fatto: false, motivo: e.message, passi };
+  }
+}
+
+async function mandaMessaggioAlCliente(riga) {
+  try {
+    if (!riga.telefonoCliente) throw new Error('Il cliente non ha lasciato un numero');
+
+    const scheda = await schedaDelConsulente(riga.consulente);
+    const scenario = await Scenario.findOne({ azione: 'whatsapp-cliente' });
+    const modello = (scenario && scenario.testo && scenario.testo.trim())
+      ? scenario.testo
+      : 'Buongiorno {nome}, sono {consulente} di Forte Immobiliare. ' +
+        'Ho ricevuto la sua richiesta{immobile} e la richiamo al più presto.';
+
+    const testo = riempi(modello, {
+      nome: String(riga.nome || '').trim().split(/\s+/).slice(-1)[0] || '',
+      consulente: (scheda && scheda.nomeCognome) || 'Forte Immobiliare',
+      immobile: riga.riferimentoImmobile ? ' per ' + riga.riferimentoImmobile : ''
+    });
+
+    await mandaWhatsapp(riga.telefonoCliente, testo);
+    riga.mexClienteInviato = 'Inviato';
+    riga.mexInviatoIl = new Date();
+    await riga.save();
+    await segnaNelDiario('whatsapp', 'ok', 'messaggio al cliente', riga.nome || '', riga.telefonoCliente);
+    return { fatto: true, a: riga.telefonoCliente };
+  } catch (e) {
+    riga.mexClienteInviato = 'Non inviato';
+    await riga.save().catch(() => {});
+    await segnaNelDiario('whatsapp', 'errore', 'messaggio al cliente', e.message, riga.nome || '');
+    return { fatto: false, motivo: e.message };
+  }
 }
 
 /* Chi deve partire per questo innesco */
