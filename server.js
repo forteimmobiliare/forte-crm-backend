@@ -4388,20 +4388,49 @@ app.get('/api/scenari/perche/:idRiga', async (req, res) => {
           ? 'TELEGRAM_BOT_TOKEN è configurato su Render'
           : 'TELEGRAM_BOT_TOKEN non è configurato su Render');
 
-      dì(riga.consulente ? 'sì' : 'no',
-        riga.consulente ? `La riga è di: ${riga.consulente}` : 'La riga non è assegnata a nessun consulente');
+      dì(riga.consulente || riga.incaricoCollegatoId ? 'sì' : 'no',
+        riga.consulente
+          ? `Il campo consulente della riga vale: ${riga.consulente}`
+          : (riga.incaricoCollegatoId
+              ? 'La riga non ha un consulente, ma è collegata a un incarico'
+              : 'La riga non ha né consulente né incarico collegato'));
 
-      if (riga.consulente) {
-        const scheda = await schedaDelConsulente(riga.consulente);
-        dì(scheda ? 'sì' : 'no',
-          scheda ? `Scheda trovata: ${scheda.nomeCognome || riga.consulente}`
-                 : `Nessuna scheda per l'utente "${riga.consulente}"`);
-        if (scheda) {
-          dì(scheda.idTelegram ? 'sì' : 'no',
-            scheda.idTelegram
-              ? `Casella Telegram: ${scheda.idTelegram}`
-              : `${scheda.nomeCognome || riga.consulente} non ha la casella Telegram nella sua scheda`);
+      /* La stessa strada che segue l'invio: prima l'incarico collegato,
+         poi il campo consulente della riga. Se la diagnosi guardasse
+         altrove direbbe il falso, che e' peggio del non dire niente. */
+      let destinatario = null;
+      let daDove = '';
+
+      if (riga.incaricoCollegatoId) {
+        const incarico = await Incarico.findById(riga.incaricoCollegatoId).catch(() => null);
+        dì(incarico ? 'sì' : 'no',
+          incarico ? `Incarico collegato: ${incarico.nome || incarico.idElemento}`
+                   : 'La riga punta a un incarico che non esiste più');
+        if (incarico) {
+          dì(incarico.listing ? 'sì' : 'no',
+            incarico.listing ? `Consulente dell'incarico (listing): ${incarico.listing}`
+                             : "L'incarico non ha un listing");
+          if (incarico.listing) {
+            destinatario = await schedaDelConsulente(incarico.listing);
+            daDove = "dall'incarico";
+          }
         }
+      }
+
+      if (!destinatario && riga.consulente) {
+        destinatario = await schedaDelConsulente(riga.consulente);
+        daDove = 'dalla riga';
+      }
+
+      dì(destinatario ? 'sì' : 'no',
+        destinatario ? `Scheda trovata ${daDove}: ${destinatario.nomeCognome || destinatario.utente}`
+                     : 'Nessuna scheda consulente trovata, né dall\'incarico né dalla riga');
+
+      if (destinatario) {
+        dì(destinatario.idTelegram ? 'sì' : 'no',
+          destinatario.idTelegram
+            ? `Casella Telegram: ${destinatario.idTelegram}`
+            : `${destinatario.nomeCognome || destinatario.utente} non ha la casella Telegram nella sua scheda`);
       }
       dì(s.testo && s.testo.trim() ? 'sì' : 'no',
         s.testo && s.testo.trim() ? 'Il testo del messaggio c\'è' : 'Il testo del messaggio è vuoto');
@@ -4447,24 +4476,44 @@ async function eseguiScenario(scenario, riga, forzato) {
 
   if (scenario.azione === 'telegram-consulente') {
     if (riga.tgInviatoIl) return { gia: true };
+
+    /* Nel Registro Chiamate la colonna "ID Telegram" mostra la casella del
+       consulente dell'incarico collegato — il suo listing — non quella del
+       campo consulente della riga. Se la riga e' agganciata a un incarico
+       si segue quella strada, che e' quella che si vede a schermo. */
+    let destinatario = scheda;
+    if (riga.incaricoCollegatoId) {
+      try {
+        const incarico = await Incarico.findById(riga.incaricoCollegatoId);
+        if (incarico && incarico.listing) {
+          const suo = await schedaDelConsulente(incarico.listing);
+          if (suo) destinatario = suo;
+        }
+      } catch (e) {}
+    }
     const testo = riempi(scenario.testo, {
       nome: riga.nome || '',
       telefono: riga.telefonoCliente || riga.emailCliente || 'nessun recapito',
       immobile: riga.riferimentoImmobile || '',
       portale: riga.portaleOrigine || riga.tipoRichiesta || '',
       messaggio: String(riga.messaggioCliente || '').slice(0, 300),
-      consulente: (scheda && scheda.nomeCognome) || ''
+      consulente: (destinatario && destinatario.nomeCognome) || ''
     });
     try {
-      if (!scheda) throw new Error('la riga non è assegnata a nessun consulente');
-      if (!scheda.idTelegram) {
-        throw new Error('manca la casella Telegram di ' + (scheda.nomeCognome || riga.consulente));
+      if (!destinatario) {
+        throw new Error(riga.incaricoCollegatoId
+          ? "né la riga né l'incarico collegato hanno un consulente"
+          : 'la riga non è assegnata a nessun consulente');
       }
-      await mandaTelegram(scheda.idTelegram, testo);
+      if (!destinatario.idTelegram) {
+        throw new Error('manca la casella Telegram di ' +
+          (destinatario.nomeCognome || destinatario.utente));
+      }
+      await mandaTelegram(destinatario.idTelegram, testo);
       riga.tgConsInviato = 'Inviato';
       riga.tgInviatoIl = new Date();
       await riga.save();
-      await segna('ok', 'avvisato ' + (scheda.nomeCognome || riga.consulente));
+      await segna('ok', 'avvisato ' + (destinatario.nomeCognome || destinatario.utente));
       return { fatto: true };
     } catch (e) {
       riga.tgConsInviato = 'Non inviato';
