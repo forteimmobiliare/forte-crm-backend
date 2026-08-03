@@ -4288,36 +4288,45 @@ app.get('/api/scenari/diagnosi', async (req, res) => {
     const esito = [];
 
     for (const s of scenari) {
-      const problemi = [];
+      /* Due elenchi distinti. Un blocco impedisce allo scenario di partire
+         per chiunque; un avviso riguarda solo alcuni casi — e trattarlo come
+         blocco vuol dire segnalare rotto qualcosa che per gli altri funziona. */
+      const blocchi = [];
+      const avvisi = [];
 
       if (s.azione === 'telegram-consulente') {
         if (!process.env.TELEGRAM_BOT_TOKEN) {
-          problemi.push('Manca TELEGRAM_BOT_TOKEN fra le variabili su Render');
+          blocchi.push('Manca TELEGRAM_BOT_TOKEN fra le variabili su Render');
         }
         const senza = consulenti.filter(c => c.utente && !c.idTelegram);
-        if (senza.length === consulenti.length && consulenti.length) {
-          problemi.push('Nessun consulente ha la casella Telegram nella sua scheda');
+        const conCasella = consulenti.filter(c => c.utente && c.idTelegram);
+
+        if (consulenti.length && !conCasella.length) {
+          /* questo si': senza nemmeno una casella non parte per nessuno */
+          blocchi.push('Nessun consulente ha la casella Telegram nella sua scheda');
         } else if (senza.length) {
-          problemi.push('Senza casella Telegram: ' +
-            senza.map(c => c.nomeCognome || c.utente).join(', '));
+          avvisi.push('Non ricevono l\'avviso: ' +
+            senza.map(c => c.nomeCognome || c.utente).join(', ') +
+            '. Per gli altri funziona.');
         }
       }
 
       if (s.azione === 'whatsapp-cliente') {
         if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN) {
-          problemi.push('Mancano le chiavi Twilio fra le variabili su Render');
+          blocchi.push('Mancano le chiavi Twilio fra le variabili su Render');
         }
         if (!process.env.TWILIO_NUMERO_WHATSAPP) {
-          problemi.push('Manca TWILIO_NUMERO_WHATSAPP');
+          blocchi.push('Manca TWILIO_NUMERO_WHATSAPP');
         }
-        problemi.push('WhatsApp vuole un template approvato da Meta per scrivere per primo');
+        avvisi.push('Per scrivere per primo a qualcuno, WhatsApp vuole un template approvato da Meta');
       }
 
-      if (!s.testo || !s.testo.trim()) problemi.push('Il testo del messaggio è vuoto');
+      if (!s.testo || !s.testo.trim()) blocchi.push('Il testo del messaggio è vuoto');
 
       esito.push({
         id: String(s._id), nome: s.nome, attivo: s.attivo,
-        puoPartire: problemi.length === 0, problemi
+        puoPartire: blocchi.length === 0,
+        problemi: blocchi, avvisi
       });
     }
     res.status(200).json(esito);
