@@ -347,6 +347,10 @@ const CentralinoSchema = new mongoose.Schema({
   whatsappInviato: { type: String, default: '' },
   messaggioCliente: { type: String, default: '' },
   incaricoCollegatoId: { type: String, default: '' },
+  /* da quale mail nasce questa riga: serve a non crearla due volte quando
+     la stessa mail arriva dalla notifica e dal controllo di riserva */
+  idMailOrigine: { type: String, default: '', index: true },
+  portaleOrigine: { type: String, default: '' },
   riferimentoImmobile: { type: String, default: '' },
   indirizzoImmobile: { type: String, default: '' },
   descrizioneImmobile: { type: String, default: '' },
@@ -3319,6 +3323,788 @@ app.get('/api/pubblico/chiamate-recenti', async (req, res) => {
     res.status(200).json(righe);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+
+/* ==========================================================================
+   LEAD DA MAIL
+   Ogni portale scrive le sue mail a modo suo. Un lettore per ciascuno e'
+   preciso e istantaneo; quando il formato cambia — e cambia — si passa a
+   Gemini, che regge qualsiasi forma. Cosi' il caso normale non costa nulla
+   e il caso strano non si perde.
+========================================================================== */
+
+/* Il testo pulito: le mail dei portali sono HTML pieno di stili */
+function testoPulito(html) {
+  return String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/(p|div|tr|td|h\d)>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'").replace(/&egrave;/g, 'è').replace(/&agrave;/g, 'à')
+    .replace(/[ \t]+/g, ' ')
+    .replace(/\n\s*\n\s*\n+/g, '\n\n')
+    .trim();
+}
+
+/* Cerca un valore dopo un'etichetta: "Telefono: 333 1234567" */
+function dopoEtichetta(testo, etichette) {
+  for (const et of etichette) {
+    const r = new RegExp(et + '\\s*[:\\-]?\\s*(.+)', 'i');
+    const m = testo.match(r);
+    if (m && m[1]) {
+      const valore = m[1].split('\n')[0].trim();
+      if (valore && valore.length < 200) return valore;
+    }
+  }
+  return '';
+}
+
+function primoTelefono(testo) {
+  /* i numeri italiani: fissi e mobili, con o senza prefisso */
+  const m = String(testo).match(/(?:\+39[\s.]?)?(?:3\d{2}|0\d{1,3})[\s.\-/]?\d{5,8}/);
+  return m ? m[0].replace(/\s+/g, ' ').trim() : '';
+}
+
+function primaMail(testo) {
+  const m = String(testo).match(/[\w.+-]+@[\w-]+\.[\w.]+/);
+  if (!m) return '';
+  /* le mail dei portali stessi non sono il cliente */
+  const trovata = m[0].toLowerCase();
+  if (/immobiliare\.it|idealista|casa\.it|wikicasa|noreply|no-reply/.test(trovata)) {
+    const tutte = String(testo).match(/[\w.+-]+@[\w-]+\.[\w.]+/g) || [];
+    const buona = tutte.find(x => !/immobiliare\.it|idealista|casa\.it|wikicasa|noreply|no-reply/i.test(x));
+    return buona || '';
+  }
+  return m[0];
+}
+
+/* I portali che conosciamo. Ognuno ha le sue etichette, ma la struttura del
+   lettore e' la stessa: cosi' aggiungerne uno e' scrivere tre righe. */
+const PORTALI = [
+  {
+    chiave: 'immobiliare',
+    nome: 'Immobiliare.it',
+    riconosci: (t, m) => /immobiliare\.it/i.test(t + ' ' + m),
+    etichette: {
+      nome: ['Nome e cognome', 'Nome', 'Da parte di', 'Utente'],
+      telefono: ['Telefono', 'Tel', 'Cellulare'],
+      mail: ['Email', 'E-mail', 'Mail'],
+      riferimento: ['Riferimento', 'Rif', 'Codice annuncio', 'ID annuncio'],
+      messaggio: ['Messaggio', 'Richiesta', 'Testo']
+    }
+  },
+  {
+    chiave: 'idealista',
+    nome: 'Idealista',
+    riconosci: (t, m) => /idealista/i.test(t + ' ' + m),
+    etichette: {
+      nome: ['Nome', 'Contatto', 'Da'],
+      telefono: ['Telefono', 'Tel'],
+      mail: ['Email', 'E-mail'],
+      riferimento: ['Riferimento', 'Codice', 'Rif'],
+      messaggio: ['Messaggio', 'Commento']
+    }
+  },
+  {
+    chiave: 'casa',
+    nome: 'Casa.it',
+    riconosci: (t, m) => /casa\.it/i.test(t + ' ' + m),
+    etichette: {
+      nome: ['Nome', 'Nominativo', 'Cliente'],
+      telefono: ['Telefono', 'Cellulare', 'Tel'],
+      mail: ['Email', 'E-mail'],
+      riferimento: ['Riferimento', 'Rif annuncio', 'Codice'],
+      messaggio: ['Messaggio', 'Richiesta']
+    }
+  },
+  {
+    chiave: 'wikicasa',
+    nome: 'Wikicasa',
+    riconosci: (t, m) => /wikicasa/i.test(t + ' ' + m),
+    etichette: {
+      nome: ['Nome', 'Utente'],
+      telefono: ['Telefono', 'Cellulare'],
+      mail: ['Email', 'E-mail'],
+      riferimento: ['Riferimento', 'Codice'],
+      messaggio: ['Messaggio', 'Richiesta']
+    }
+  }
+];
+
+/* Legge la mail senza scomodare nessun modello. Torna null quando non
+   riconosce abbastanza: e' il segnale per passare a Gemini invece di
+   creare un lead a meta'. */
+function leggiMailLead(testoGrezzo, mittente, oggetto) {
+  const testo = testoPulito(testoGrezzo);
+  const portale = PORTALI.find(p => p.riconosci(testo, (mittente || '') + ' ' + (oggetto || '')));
+  if (!portale) return null;
+
+  const e = portale.etichette;
+  const nome = dopoEtichetta(testo, e.nome);
+  const telefono = dopoEtichetta(testo, e.telefono) || primoTelefono(testo);
+  const mail = dopoEtichetta(testo, e.mail) || primaMail(testo);
+
+  /* Senza un modo per richiamarlo non e' un lead: e' meglio farlo leggere
+     a Gemini che salvare una riga inutile. */
+  if (!telefono && !mail) return null;
+  if (!nome && !telefono) return null;
+
+  return {
+    portale: portale.chiave, nomePortale: portale.nome,
+    nome: nome || '(senza nome)',
+    telefono: (telefono || '').replace(/[^\d+\s]/g, '').trim(),
+    mail: mail || '',
+    riferimento: dopoEtichetta(testo, e.riferimento),
+    messaggio: dopoEtichetta(testo, e.messaggio) || testo.slice(0, 400),
+    comeLetta: 'diretta'
+  };
+}
+
+
+/* ==========================================================================
+   COME SI COMPORTA L'AUTOMAZIONE
+   Il messaggio al cliente e le notifiche cambiano nel tempo: se stessero nel
+   codice ogni ritocco vorrebbe dire un rilascio. Stanno qui, modificabili
+   dal CRM.
+========================================================================== */
+const ImpostazioniLeadSchema = new mongoose.Schema({
+  chiave: { type: String, default: 'automazione-lead', unique: true },
+
+  attiva: { type: Boolean, default: false },
+
+  /* il messaggio che parte al cliente: {nome} e {immobile} si sostituiscono */
+  messaggioCliente: {
+    type: String,
+    default: 'Buongiorno {nome}, sono {consulente} di Forte Immobiliare. ' +
+      'Ho ricevuto la sua richiesta{immobile} e la richiamo al più presto. ' +
+      'Se preferisce può scrivermi qui su WhatsApp.'
+  },
+  mandaWhatsapp: { type: Boolean, default: true },
+
+  /* la notifica al consulente su Telegram */
+  mandaTelegram: { type: Boolean, default: true },
+  testoTelegram: {
+    type: String,
+    default: '🔔 Nuovo lead da {portale}\n\n{nome}\n{telefono}\n{immobile}\n\n{messaggio}'
+  },
+
+  /* a chi assegnare quando non si capisce di chi e' l'immobile */
+  consulenteRiserva: { type: String, default: '' },
+
+
+  ultimaMailLetta: { type: String, default: '' },
+  ultimaSorveglianza: { type: Date, default: null },
+  storicoIdGmail: { type: String, default: '' }
+}, { timestamps: true });
+
+const ImpostazioniLead = mongoose.model('ImpostazioniLead', ImpostazioniLeadSchema);
+
+async function impostazioniLead() {
+  let i = await ImpostazioniLead.findOne({ chiave: 'automazione-lead' });
+  if (!i) i = await ImpostazioniLead.create({ chiave: 'automazione-lead' });
+  return i;
+}
+
+app.get('/api/lead/impostazioni', async (req, res) => {
+  try { res.status(200).json(await impostazioniLead()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/lead/impostazioni', async (req, res) => {
+  try {
+    const i = await impostazioniLead();
+    ['attiva', 'messaggioCliente', 'mandaWhatsapp', 'mandaTelegram', 'testoTelegram',
+     'consulenteRiserva'].forEach(c => {
+      if (req.body[c] !== undefined) i[c] = req.body[c];
+    });
+    await i.save();
+    res.status(200).json(i);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================================================
+   MANDARE I MESSAGGI
+========================================================================== */
+
+/* WhatsApp via Twilio. Il numero va scritto come lo vuole Twilio, con il
+   prefisso: i clienti lo lasciano in dieci forme diverse. */
+function numeroPerTwilio(grezzo) {
+  let n = String(grezzo || '').replace(/[^\d+]/g, '');
+  if (!n) return '';
+  if (n.startsWith('00')) n = '+' + n.slice(2);
+  if (!n.startsWith('+')) {
+    /* un numero italiano senza prefisso: lo aggiungo */
+    n = n.replace(/^0039/, '');
+    n = '+39' + n;
+  }
+  return n;
+}
+
+async function mandaWhatsapp(numero, testo) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const mittente = process.env.TWILIO_NUMERO_WHATSAPP;   // es. whatsapp:+14155238886
+
+  if (!sid || !token || !mittente) throw new Error('Twilio non configurato');
+  const a = numeroPerTwilio(numero);
+  if (!a) throw new Error('numero del cliente illeggibile');
+
+  const corpo = new URLSearchParams({
+    To: 'whatsapp:' + a,
+    From: mittente.startsWith('whatsapp:') ? mittente : 'whatsapp:' + mittente,
+    Body: testo
+  }).toString();
+
+  return new Promise((risolvi, rifiuta) => {
+    const r = https.request({
+      hostname: 'api.twilio.com',
+      path: `/2010-04-01/Accounts/${sid}/Messages.json`,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Length': Buffer.byteLength(corpo),
+        'Authorization': 'Basic ' + Buffer.from(sid + ':' + token).toString('base64')
+      }
+    }, (x) => {
+      let d = '';
+      x.on('data', p => d += p);
+      x.on('end', () => {
+        try {
+          const esito = JSON.parse(d);
+          if (esito.error_message || esito.code) return rifiuta(new Error(esito.error_message || 'codice ' + esito.code));
+          risolvi(esito);
+        } catch (e) { rifiuta(new Error('risposta illeggibile da Twilio')); }
+      });
+    });
+    r.on('error', rifiuta);
+    r.write(corpo);
+    r.end();
+  });
+}
+
+async function mandaTelegram(chatId, testo) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('Telegram non configurato');
+  if (!chatId) throw new Error('manca la casella Telegram del consulente');
+
+  const corpo = JSON.stringify({ chat_id: chatId, text: testo, parse_mode: 'HTML' });
+  return new Promise((risolvi, rifiuta) => {
+    const r = https.request({
+      hostname: 'api.telegram.org',
+      path: `/bot${token}/sendMessage`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpo) }
+    }, (x) => {
+      let d = '';
+      x.on('data', p => d += p);
+      x.on('end', () => {
+        try {
+          const esito = JSON.parse(d);
+          if (!esito.ok) return rifiuta(new Error(esito.description || 'Telegram ha rifiutato'));
+          risolvi(esito);
+        } catch (e) { rifiuta(new Error('risposta illeggibile da Telegram')); }
+      });
+    });
+    r.on('error', rifiuta);
+    r.write(corpo);
+    r.end();
+  });
+}
+
+/* Sostituisce i segnaposto nel testo */
+function riempi(modello, dati) {
+  return String(modello || '').replace(/\{(\w+)\}/g, (tutto, campo) => {
+    const v = dati[campo];
+    return v === undefined || v === null ? '' : String(v);
+  }).replace(/\n{3,}/g, '\n\n').trim();
+}
+
+
+/* ==========================================================================
+   DA UNA MAIL A UN LEAD
+   Un solo punto: qualunque cosa porti la mail — la notifica di Gmail, il
+   controllo di riserva, o una prova a mano — finisce qui. Cosi' il
+   comportamento e' identico e c'e' un posto solo da correggere.
+========================================================================== */
+
+/* Quando il lettore diretto non ce la fa, la mail la legge Gemini. Regge i
+   formati nuovi, ma costa e ogni tanto sbaglia: e' la rete di sicurezza,
+   non la prima scelta. */
+async function leggiMailConGemini(testo, mittente, oggetto) {
+  if (!GEMINI_API_KEY) throw new Error('Gemini non configurato');
+
+  const richiesta = `Questa è una mail ricevuta da un'agenzia immobiliare.
+Se è la richiesta di un potenziale cliente (un lead), estrai i dati.
+Se NON è un lead — è pubblicità, una fattura, una newsletter, una risposta
+automatica — dillo chiaramente invece di inventare.
+
+Mittente: ${mittente || ''}
+Oggetto: ${oggetto || ''}
+
+${String(testo).slice(0, 6000)}
+
+Rispondi SOLO con JSON:
+{"lead": true/false, "motivo": "perché non è un lead, se non lo è",
+ "nome": "", "telefono": "", "mail": "", "riferimento": "codice dell'annuncio se c'è",
+ "portale": "immobiliare/idealista/casa/wikicasa/sito/altro", "messaggio": "cosa chiede"}`;
+
+  const corpo = JSON.stringify({
+    contents: [{ role: 'user', parts: [{ text: richiesta }] }],
+    generationConfig: { responseMimeType: 'application/json' }
+  });
+
+  const risposta = await new Promise((risolvi, rifiuta) => {
+    const r = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path: `/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(corpo) }
+    }, (x) => { let d = ''; x.on('data', p => d += p); x.on('end', () => risolvi(d)); });
+    r.on('error', rifiuta); r.write(corpo); r.end();
+  });
+
+  const dati = JSON.parse(risposta);
+  if (dati.error) throw new Error(dati.error.message);
+  const t = dati.candidates && dati.candidates[0] && dati.candidates[0].content &&
+            dati.candidates[0].content.parts && dati.candidates[0].content.parts[0].text;
+  if (!t) throw new Error('Gemini non ha risposto come previsto');
+
+  const letto = JSON.parse(t);
+  if (!letto.lead) return { nonEunLead: true, motivo: letto.motivo || 'non sembra una richiesta' };
+
+  return {
+    portale: letto.portale || 'altro', nomePortale: letto.portale || 'altro',
+    nome: letto.nome || '(senza nome)',
+    telefono: letto.telefono || '', mail: letto.mail || '',
+    riferimento: letto.riferimento || '',
+    messaggio: letto.messaggio || '',
+    comeLetta: 'gemini'
+  };
+}
+
+/* Di chi e' questo lead. Se la mail nomina un immobile nostro, va al
+   consulente che lo segue: e' lui che sa rispondere. */
+async function aChiVa(riferimento, impostazioni) {
+  if (riferimento) {
+    const pulito = String(riferimento).trim();
+    const incarico = await Incarico.findOne({
+      $or: [
+        { idElemento: new RegExp('^\\s*' + pulito.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') },
+        { nome: new RegExp(pulito.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }
+      ]
+    });
+    if (incarico) {
+      return {
+        consulente: incarico.consulente || impostazioni.consulenteRiserva || '',
+        incaricoId: String(incarico._id),
+        immobile: incarico.nome || incarico.idElemento || '',
+        riconosciuto: true
+      };
+    }
+  }
+  return {
+    consulente: impostazioni.consulenteRiserva || '',
+    incaricoId: '', immobile: '', riconosciuto: false
+  };
+}
+
+/* Il giro completo. Ogni passo lascia una riga nel diario: se il messaggio
+   non parte lo si scopre da li', non dal cliente che non richiama. */
+async function lavoraMailLead(testo, mittente, oggetto, idGmail) {
+  const impostazioni = await impostazioniLead();
+
+  /* niente doppioni: la stessa mail puo' arrivare dalla notifica e dal
+     controllo di riserva */
+  if (idGmail) {
+    const gia = await Centralino.findOne({ idMailOrigine: idGmail });
+    if (gia) return { saltata: true, motivo: 'già lavorata', id: String(gia._id) };
+  }
+
+  /* prima il lettore diretto, poi Gemini */
+  let letto = null;
+  try { letto = leggiMailLead(testo, mittente, oggetto); } catch (e) { letto = null; }
+
+  if (!letto) {
+    try {
+      letto = await leggiMailConGemini(testo, mittente, oggetto);
+    } catch (e) {
+      await segnaNelDiario('lead', 'errore', 'lettura mail', e.message, mittente || '');
+      return { errore: e.message };
+    }
+  }
+
+  if (letto.nonEunLead) {
+    await segnaNelDiario('lead', 'scartato', 'mail scartata', letto.motivo, mittente || '');
+    return { scartata: true, motivo: letto.motivo };
+  }
+
+  const destinazione = await aChiVa(letto.riferimento, impostazioni);
+
+  const riga = await Centralino.create({
+    nome: letto.nome,
+    telefonoCliente: letto.telefono,
+    emailCliente: letto.mail,
+    messaggioCliente: letto.messaggio,
+    tipoRichiesta: destinazione.riconosciuto ? 'Richiesta Specifica' : 'Richiesta Generica',
+    stato: 'Da Fare',
+    consulente: destinazione.consulente,
+    riferimentoImmobile: letto.riferimento || '',
+    incaricoCollegatoId: destinazione.incaricoId,
+    idMailOrigine: idGmail || '',
+    portaleOrigine: letto.nomePortale || letto.portale || ''
+  });
+
+  await segnaNelDiario('lead', 'ok', 'lead creato',
+    `${letto.nome} · ${letto.telefono || letto.mail}` +
+    (destinazione.immobile ? ' · ' + destinazione.immobile : '') +
+    (letto.comeLetta === 'gemini' ? ' (letta da Gemini)' : ''),
+    letto.nomePortale || mittente || '');
+
+  const esiti = { id: String(riga._id), letto, whatsapp: null, telegram: null };
+
+  /* il messaggio al cliente */
+  if (impostazioni.attiva && impostazioni.mandaWhatsapp && letto.telefono) {
+    const scheda = await Consulente.findOne({ utente: destinazione.consulente });
+    const testoMsg = riempi(impostazioni.messaggioCliente, {
+      nome: String(letto.nome).split(' ')[0],
+      consulente: (scheda && scheda.nomeCognome) || 'Forte Immobiliare',
+      immobile: destinazione.immobile ? ' per ' + destinazione.immobile : ''
+    });
+    try {
+      await mandaWhatsapp(letto.telefono, testoMsg);
+      esiti.whatsapp = 'inviato';
+      await segnaNelDiario('twilio', 'ok', 'messaggio al cliente', letto.nome, letto.telefono);
+    } catch (e) {
+      esiti.whatsapp = 'fallito: ' + e.message;
+      await segnaNelDiario('twilio', 'errore', 'messaggio al cliente', e.message, letto.telefono);
+    }
+  }
+
+  /* la notifica al consulente. La casella Telegram sta nella sua scheda,
+     insieme a telefono e mail: un elenco separato andrebbe tenuto allineato
+     a mano, e prima o poi non lo sarebbe piu'. */
+  if (impostazioni.attiva && impostazioni.mandaTelegram) {
+    const scheda = await Consulente.findOne({ utente: destinazione.consulente });
+    const casella = (scheda && scheda.idTelegram) || '';
+    const testoTg = riempi(impostazioni.testoTelegram, {
+      portale: letto.nomePortale || 'una mail',
+      nome: letto.nome,
+      telefono: letto.telefono || letto.mail || 'nessun recapito',
+      immobile: destinazione.immobile || '',
+      messaggio: String(letto.messaggio || '').slice(0, 300)
+    });
+    try {
+      if (!casella) throw new Error('manca la casella Telegram di ' +
+        (destinazione.consulente || 'questo consulente') + ': mettila nella sua scheda');
+      await mandaTelegram(casella, testoTg);
+      esiti.telegram = 'inviato';
+      await segnaNelDiario('telegram', 'ok', 'notifica al consulente',
+        destinazione.consulente || 'nessuno', letto.nome);
+    } catch (e) {
+      esiti.telegram = 'fallito: ' + e.message;
+      await segnaNelDiario('telegram', 'errore', 'notifica al consulente', e.message,
+        destinazione.consulente || '');
+    }
+  }
+
+  return esiti;
+}
+
+/* Per provare senza aspettare una mail vera: si incolla il testo e si vede
+   cosa ne esce, senza mandare niente a nessuno. */
+app.post('/api/lead/prova', async (req, res) => {
+  try {
+    const b = req.body || {};
+    let letto = leggiMailLead(b.testo, b.mittente, b.oggetto);
+    let come = 'diretta';
+    if (!letto) {
+      letto = await leggiMailConGemini(b.testo, b.mittente, b.oggetto);
+      come = 'gemini';
+    }
+    if (letto.nonEunLead) return res.status(200).json({ lead: false, motivo: letto.motivo });
+
+    const impostazioni = await impostazioniLead();
+    const dove = await aChiVa(letto.riferimento, impostazioni);
+    res.status(200).json({ lead: true, come, letto, destinazione: dove });
+  } catch (err) { res.status(200).json({ lead: false, errore: err.message }); }
+});
+
+/* L'ingresso vero: da qui passano la notifica di Gmail e il controllo di
+   riserva. Utile anche a mano, mentre si mette a punto. */
+app.post('/api/lead/in-arrivo', async (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!b.testo) return res.status(400).json({ error: 'Manca il testo della mail' });
+    const esito = await lavoraMailLead(b.testo, b.mittente, b.oggetto, b.idGmail);
+    res.status(200).json(esito);
+  } catch (err) {
+    await segnaNelDiario('lead', 'errore', 'mail in arrivo', err.message, '');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+
+/* ==========================================================================
+   LEGGERE GMAIL
+   Due strade verso lo stesso posto: la notifica di Google fa nascere il lead
+   in due secondi, il controllo di riserva recupera quello che la notifica si
+   perde — e ogni tanto si perde. Una mail persa costa piu' di un controllo
+   in piu'.
+========================================================================== */
+
+/* Il token di accesso dura un'ora: si rinnova da solo con quello lungo */
+let GMAIL_TOKEN = { valore: '', scade: 0 };
+
+async function tokenGmail() {
+  if (GMAIL_TOKEN.valore && Date.now() < GMAIL_TOKEN.scade - 60000) return GMAIL_TOKEN.valore;
+
+  const id = process.env.GMAIL_CLIENT_ID;
+  const segreto = process.env.GMAIL_CLIENT_SECRET;
+  const lungo = process.env.GMAIL_REFRESH_TOKEN;
+  if (!id || !segreto || !lungo) throw new Error('Gmail non configurato');
+
+  const corpo = new URLSearchParams({
+    client_id: id, client_secret: segreto,
+    refresh_token: lungo, grant_type: 'refresh_token'
+  }).toString();
+
+  const risposta = await new Promise((risolvi, rifiuta) => {
+    const r = https.request({
+      hostname: 'oauth2.googleapis.com', path: '/token', method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded',
+                 'Content-Length': Buffer.byteLength(corpo) }
+    }, (x) => { let d = ''; x.on('data', p => d += p); x.on('end', () => risolvi(d)); });
+    r.on('error', rifiuta); r.write(corpo); r.end();
+  });
+
+  const dati = JSON.parse(risposta);
+  if (dati.error) throw new Error(dati.error_description || dati.error);
+
+  GMAIL_TOKEN = { valore: dati.access_token, scade: Date.now() + (dati.expires_in || 3600) * 1000 };
+  return GMAIL_TOKEN.valore;
+}
+
+function chiediAGmail(percorso) {
+  return tokenGmail().then(token => new Promise((risolvi, rifiuta) => {
+    https.get({
+      hostname: 'gmail.googleapis.com', path: percorso,
+      headers: { Authorization: 'Bearer ' + token }
+    }, (x) => {
+      let d = '';
+      x.on('data', p => d += p);
+      x.on('end', () => {
+        try {
+          const dati = JSON.parse(d);
+          if (dati.error) return rifiuta(new Error(dati.error.message));
+          risolvi(dati);
+        } catch (e) { rifiuta(new Error('risposta illeggibile da Gmail')); }
+      });
+    }).on('error', rifiuta);
+  }));
+}
+
+/* Il corpo di una mail sta annidato in parti: lo cerco ovunque sia */
+function corpoDellaMail(parte) {
+  if (!parte) return '';
+  if (parte.body && parte.body.data) {
+    return Buffer.from(parte.body.data, 'base64').toString('utf8');
+  }
+  if (parte.parts) {
+    /* preferisco l'HTML: contiene le tabelle dove i portali mettono i dati */
+    const html = parte.parts.find(p => p.mimeType === 'text/html');
+    const testo = parte.parts.find(p => p.mimeType === 'text/plain');
+    return corpoDellaMail(html) || corpoDellaMail(testo) ||
+           parte.parts.map(p => corpoDellaMail(p)).find(Boolean) || '';
+  }
+  return '';
+}
+
+function intestazione(mail, nome) {
+  const h = (mail.payload && mail.payload.headers) || [];
+  const t = h.find(x => String(x.name).toLowerCase() === nome.toLowerCase());
+  return t ? t.value : '';
+}
+
+/* Prende una mail e la manda al motore */
+async function lavoraMailDiGmail(id) {
+  const mail = await chiediAGmail(`/gmail/v1/users/me/messages/${id}?format=full`);
+  const testo = corpoDellaMail(mail.payload);
+  if (!testo) {
+    await segnaNelDiario('gmail', 'scartato', 'mail vuota', 'nessun corpo leggibile', id);
+    return { scartata: true };
+  }
+  return lavoraMailLead(testo, intestazione(mail, 'From'), intestazione(mail, 'Subject'), id);
+}
+
+/* Quali mail guardare: solo quelle non lette che sembrano dei portali.
+   Senza filtro il server leggerebbe tutta la posta, comprese cose private. */
+function filtroLead() {
+  return process.env.GMAIL_FILTRO ||
+    'is:unread (from:immobiliare.it OR from:idealista.it OR from:casa.it OR from:wikicasa.it)';
+}
+
+/* Il controllo di riserva: guarda cosa e' arrivato e non e' stato lavorato */
+async function controlloDiRiserva() {
+  try {
+    const q = encodeURIComponent(filtroLead());
+    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=15`);
+    const mail = elenco.messages || [];
+    if (!mail.length) return { guardate: 0 };
+
+    let nuovi = 0;
+    for (const m of mail) {
+      const gia = await Centralino.findOne({ idMailOrigine: m.id });
+      if (gia) continue;
+      const esito = await lavoraMailDiGmail(m.id);
+      if (esito && esito.id) nuovi++;
+    }
+    if (nuovi) {
+      await segnaNelDiario('gmail', 'ok', 'controllo di riserva',
+        nuovi + (nuovi === 1 ? ' mail recuperata' : ' mail recuperate'), '');
+    }
+    return { guardate: mail.length, nuovi };
+  } catch (e) {
+    await segnaNelDiario('gmail', 'errore', 'controllo di riserva', e.message, '');
+    return { errore: e.message };
+  }
+}
+
+/* La notifica di Google: arriva qui appena entra una mail. Non dice quale,
+   dice solo "e' cambiato qualcosa" — quindi si guarda cosa c'e' di nuovo. */
+app.post('/api/lead/notifica-gmail', async (req, res) => {
+  /* si risponde subito: Google riprova se tardiamo, e ci ritroveremmo la
+     stessa notifica lavorata due volte */
+  res.status(200).json({ ricevuta: true });
+
+  try {
+    const impostazioni = await impostazioniLead();
+    if (!impostazioni.attiva) {
+      await segnaNelDiario('gmail', 'scartato', 'notifica ignorata', 'automazione spenta', '');
+      return;
+    }
+    const esito = await controlloDiRiserva();
+    if (esito.nuovi) {
+      await segnaNelDiario('gmail', 'ok', 'notifica lavorata',
+        esito.nuovi + ' nuovi lead', '');
+    }
+  } catch (e) {
+    await segnaNelDiario('gmail', 'errore', 'notifica', e.message, '');
+  }
+});
+
+/* Registra la sorveglianza: va rinnovata ogni sette giorni, e il server lo
+   fa da solo — ma se salta, il controllo di riserva regge lo stesso. */
+async function accendiSorveglianza() {
+  const argomento = process.env.GMAIL_PUBSUB_TOPIC;
+  if (!argomento) throw new Error('GMAIL_PUBSUB_TOPIC non configurato');
+
+  const token = await tokenGmail();
+  const corpo = JSON.stringify({ topicName: argomento, labelIds: ['INBOX'] });
+
+  const risposta = await new Promise((risolvi, rifiuta) => {
+    const r = https.request({
+      hostname: 'gmail.googleapis.com', path: '/gmail/v1/users/me/watch', method: 'POST',
+      headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json',
+                 'Content-Length': Buffer.byteLength(corpo) }
+    }, (x) => { let d = ''; x.on('data', p => d += p); x.on('end', () => risolvi(d)); });
+    r.on('error', rifiuta); r.write(corpo); r.end();
+  });
+
+  const dati = JSON.parse(risposta);
+  if (dati.error) throw new Error(dati.error.message);
+
+  const i = await impostazioniLead();
+  i.ultimaSorveglianza = new Date();
+  i.storicoIdGmail = String(dati.historyId || '');
+  await i.save();
+
+  await segnaNelDiario('gmail', 'ok', 'sorveglianza accesa',
+    'scade il ' + new Date(Number(dati.expiration)).toLocaleDateString('it-IT'), '');
+  return dati;
+}
+
+app.post('/api/lead/accendi-sorveglianza', async (req, res) => {
+  try { res.status(200).json({ fatto: true, dati: await accendiSorveglianza() }); }
+  catch (err) {
+    await segnaNelDiario('gmail', 'errore', 'sorveglianza', err.message, '');
+    res.status(200).json({ fatto: false, motivo: err.message });
+  }
+});
+
+/* Manda un messaggio di prova a un consulente: e' l'unico modo di sapere se
+   la sua casella Telegram e' quella giusta senza aspettare un lead vero */
+app.post('/api/lead/prova-telegram/:utente', async (req, res) => {
+  try {
+    const scheda = await Consulente.findOne({ utente: req.params.utente });
+    if (!scheda) return res.status(200).json({ fatto: false, motivo: 'Consulente non trovato' });
+    if (!scheda.idTelegram) {
+      return res.status(200).json({ fatto: false,
+        motivo: 'Nella sua scheda manca la casella Telegram' });
+    }
+    await mandaTelegram(scheda.idTelegram,
+      '✅ Prova da Forte CRM\n\nSe leggi questo messaggio, le notifiche dei lead ti arriveranno qui.');
+    await segnaNelDiario('telegram', 'ok', 'prova', scheda.nomeCognome || req.params.utente, '');
+    res.status(200).json({ fatto: true });
+  } catch (err) {
+    await segnaNelDiario('telegram', 'errore', 'prova', err.message, req.params.utente);
+    res.status(200).json({ fatto: false, motivo: err.message });
+  }
+});
+
+/* Chi ha scritto al bot di recente, con la sua casella. Serve a riempire il
+   campo senza chiedere a ognuno di cercarselo. */
+app.get('/api/lead/caselle-telegram', async (req, res) => {
+  try {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) return res.status(200).json({ pronte: [], motivo: 'TELEGRAM_BOT_TOKEN non configurato' });
+
+    const risposta = await new Promise((risolvi, rifiuta) => {
+      https.get({ hostname: 'api.telegram.org', path: `/bot${token}/getUpdates?limit=40` },
+        (x) => { let d = ''; x.on('data', p => d += p); x.on('end', () => risolvi(d)); }).on('error', rifiuta);
+    });
+    const dati = JSON.parse(risposta);
+    if (!dati.ok) return res.status(200).json({ pronte: [], motivo: dati.description || 'Telegram ha rifiutato' });
+
+    const viste = {};
+    (dati.result || []).forEach(u => {
+      const m = u.message || u.edited_message;
+      if (!m || !m.from) return;
+      viste[m.from.id] = {
+        chatId: String(m.chat.id),
+        nome: [m.from.first_name, m.from.last_name].filter(Boolean).join(' '),
+        utenteTelegram: m.from.username ? '@' + m.from.username : ''
+      };
+    });
+    res.status(200).json({ pronte: Object.values(viste) });
+  } catch (err) { res.status(200).json({ pronte: [], motivo: err.message }); }
+});
+
+app.post('/api/lead/controlla-ora', async (req, res) => {
+  try { res.status(200).json(await controlloDiRiserva()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Ogni cinque minuti il controllo di riserva; ogni giorno il rinnovo della
+   sorveglianza, che Google fa scadere dopo una settimana. */
+setInterval(async () => {
+  try {
+    const i = await impostazioniLead();
+    if (i.attiva && process.env.GMAIL_REFRESH_TOKEN) await controlloDiRiserva();
+  } catch (e) {}
+}, 5 * 60 * 1000);
+
+setInterval(async () => {
+  try {
+    const i = await impostazioniLead();
+    if (!i.attiva || !process.env.GMAIL_PUBSUB_TOPIC) return;
+    const scaduta = !i.ultimaSorveglianza ||
+      (Date.now() - new Date(i.ultimaSorveglianza).getTime()) > 5 * 24 * 3600 * 1000;
+    if (scaduta) await accendiSorveglianza();
+  } catch (e) {}
+}, 6 * 3600 * 1000);
 
 /* Gli amministratori gia' noti, per il menu a discesa */
 app.get('/api/pubblico/amministratori', async (req, res) => {
