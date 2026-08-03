@@ -4563,3 +4563,4 @@ app.put('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
 
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
+  
