@@ -362,6 +362,11 @@ const CentralinoSchema = new mongoose.Schema({
   portale: { type: String, default: '' },
   dataRichiesta: { type: String, default: '' },
   tgConsInviato: { type: String, default: '' },
+  /* quando e' partito davvero. Serve a non rimandarlo ogni volta che la riga
+     viene risalvata: la colonna dice "Inviato" anche dopo, e senza questo
+     ogni modifica farebbe partire un altro messaggio. */
+  tgInviatoIl: { type: Date, default: null },
+  mexInviatoIl: { type: Date, default: null },
   mexClienteInviato: { type: String, default: '' }
 }, { timestamps: true });
 /* L'automazione parte quando la riga nasce, da qualunque parte arrivi: dal
@@ -374,15 +379,9 @@ CentralinoSchema.pre('save', function (next) {
   next();
 });
 
-CentralinoSchema.post('save', function (documento) {
-  if (!documento.eraNuova) return;
-  setImmediate(() => {
-    try {
-      avvisaPerRigaCentralino(documento).catch(err =>
-        console.error('Automazione centralino non riuscita:', err.message));
-    } catch (e) { console.error('Automazione centralino non partita:', e.message); }
-  });
-});
+/* Per ora l'invio non parte alla creazione: lo comanda chi mette la colonna
+   "Tg Cons Inviato" su Inviato, come faceva lo scenario su Make. Cosi' si
+   sceglie riga per riga finche' non ci si fida dell'automatismo. */
 
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
 
@@ -1251,6 +1250,26 @@ app.put('/api/centralino/:id', async (req, res) => {
   try {
     const aggiornato = await Centralino.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
     if (!aggiornato) return res.status(404).json({ error: 'Chiamata non trovata' });
+
+    /* Il grilletto: mettendo la colonna "Tg Cons Inviato" su Inviato, il
+       messaggio parte davvero. E' il modo in cui funzionava lo scenario su
+       Make, e permette di sceglierlo riga per riga finche' non ci si fida
+       dell'automatismo. La colonna resta su Inviato anche dopo, ma il campo
+       tgInviatoIl impedisce che riparta a ogni salvataggio. */
+    const chiedeTelegram = req.body.tgConsInviato === 'Inviato' && !aggiornato.tgInviatoIl;
+    const chiedeWhatsapp = req.body.mexClienteInviato === 'Inviato' && !aggiornato.mexInviatoIl;
+
+    if (chiedeTelegram || chiedeWhatsapp) {
+      /* rispondo subito e mando dopo: chi ha cliccato non resta fermo
+         davanti alla tabella mentre Telegram fa il suo giro */
+      res.status(200).json({ status: 'success', data: aggiornato, invioPartito: true });
+      setImmediate(() => {
+        avvisaPerRigaCentralino(aggiornato, true).catch(err =>
+          console.error('Invio dal centralino non riuscito:', err.message));
+      });
+      return;
+    }
+
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -4092,14 +4111,9 @@ setInterval(async () => {
    un solo comportamento — e un solo posto da correggere.
 ========================================================================== */
 
-async function avvisaPerRigaCentralino(riga) {
+async function avvisaPerRigaCentralino(riga, forzato) {
   const impostazioni = await impostazioniLead();
-  if (!impostazioni.attiva) return { spenta: true };
-
-  /* gia' avvisato: succede quando la stessa riga viene salvata due volte */
-  if (riga.tgConsInviato === 'Inviato' && riga.mexClienteInviato === 'Inviato') {
-    return { gia: true };
-  }
+  if (!impostazioni.attiva && !forzato) return { spenta: true };
 
   const scheda = riga.consulente
     ? await Consulente.findOne({ utente: riga.consulente })
@@ -4108,7 +4122,7 @@ async function avvisaPerRigaCentralino(riga) {
   const esiti = {};
 
   /* la notifica al consulente */
-  if (impostazioni.mandaTelegram && riga.tgConsInviato !== 'Inviato') {
+  if ((impostazioni.mandaTelegram || forzato) && !riga.tgInviatoIl) {
     const testo = riempi(impostazioni.testoTelegram, {
       portale: riga.portaleOrigine || riga.tipoRichiesta || 'Centralino',
       nome: riga.nome || '',
@@ -4124,6 +4138,7 @@ async function avvisaPerRigaCentralino(riga) {
       }
       await mandaTelegram(scheda.idTelegram, testo);
       riga.tgConsInviato = 'Inviato';
+      riga.tgInviatoIl = new Date();
       esiti.telegram = 'inviato';
       await segnaNelDiario('telegram', 'ok', 'avviso al consulente',
         (scheda.nomeCognome || riga.consulente) + ' · ' + (riga.nome || ''), riga.portaleOrigine || '');
@@ -4135,7 +4150,7 @@ async function avvisaPerRigaCentralino(riga) {
   }
 
   /* il messaggio al cliente */
-  if (impostazioni.mandaWhatsapp && riga.mexClienteInviato !== 'Inviato' && riga.telefonoCliente) {
+  if ((impostazioni.mandaWhatsapp || forzato) && !riga.mexInviatoIl && riga.telefonoCliente) {
     const testo = riempi(impostazioni.messaggioCliente, {
       /* "Ferrari Marica" arriva col cognome davanti: al cliente si scrive
          col nome di battesimo, che e' l'ultima parola */
@@ -4147,6 +4162,7 @@ async function avvisaPerRigaCentralino(riga) {
     try {
       await mandaWhatsapp(riga.telefonoCliente, testo);
       riga.mexClienteInviato = 'Inviato';
+      riga.mexInviatoIl = new Date();
       esiti.whatsapp = 'inviato';
       await segnaNelDiario('whatsapp', 'ok', 'messaggio al cliente',
         riga.nome || '', riga.telefonoCliente);
