@@ -1258,9 +1258,15 @@ app.put('/api/centralino/:id', async (req, res) => {
        guasto invisibile. */
     let esitoInvio = null;
 
-    if (req.body.tgConsInviato === 'Inviato' && !aggiornato.tgInviatoIl) {
+    /* Nel CRM la colonna vale "✅ Inviato", con l'emoji davanti. Confrontarla
+       con "Inviato" secco non tornava mai, e non partiva niente senza che
+       comparisse un errore: guardo solo la parola, ignorando simboli e
+       maiuscole. */
+    const dice = (v) => /invia|inviato/i.test(String(v || '').replace(/[^\p{L}\s]/gu, '').trim());
+
+    if (dice(req.body.tgConsInviato) && !aggiornato.tgInviatoIl) {
       esitoInvio = await mandaAvvisoTelegram(aggiornato);
-    } else if (req.body.mexClienteInviato === 'Inviato' && !aggiornato.mexInviatoIl) {
+    } else if (dice(req.body.mexClienteInviato) && !aggiornato.mexInviatoIl) {
       esitoInvio = await mandaMessaggioAlCliente(aggiornato);
     }
 
@@ -4239,9 +4245,29 @@ const SCENARI_DI_PARTENZA = [
   }
 ];
 
+/* Due chiamate quasi simultanee trovavano entrambe zero scenari e li
+   creavano tutte e due: ne uscivano quattro. Ora si crea per azione, una
+   volta sola, e i doppioni gia' nati si ripuliscono. */
+let CREAZIONE_SCENARI = null;
+
 async function scenariEsistenti() {
-  const quanti = await Scenario.countDocuments();
-  if (!quanti) await Scenario.insertMany(SCENARI_DI_PARTENZA);
+  if (!CREAZIONE_SCENARI) {
+    CREAZIONE_SCENARI = (async () => {
+      for (const s of SCENARI_DI_PARTENZA) {
+        const gia = await Scenario.findOne({ azione: s.azione });
+        if (!gia) await Scenario.create(s);
+      }
+      /* i doppioni delle volte precedenti: tengo il piu' vecchio per azione */
+      for (const s of SCENARI_DI_PARTENZA) {
+        const tutti = await Scenario.find({ azione: s.azione }).sort({ createdAt: 1 });
+        if (tutti.length > 1) {
+          const daTogliere = tutti.slice(1).map(x => x._id);
+          await Scenario.deleteMany({ _id: { $in: daTogliere } });
+        }
+      }
+    })().catch(e => { CREAZIONE_SCENARI = null; throw e; });
+  }
+  await CREAZIONE_SCENARI;
   return Scenario.find({}).sort({ createdAt: 1 });
 }
 
@@ -4604,7 +4630,7 @@ async function mandaAvvisoTelegram(riga) {
 
     await mandaTelegram(destinatario.idTelegram, testo);
 
-    riga.tgConsInviato = 'Inviato';
+    riga.tgConsInviato = '✅ Inviato';
     riga.tgInviatoIl = new Date();
     await riga.save();
 
@@ -4621,7 +4647,7 @@ async function mandaAvvisoTelegram(riga) {
     return { fatto: true, a: destinatario.nomeCognome || destinatario.utente, passi };
   } catch (e) {
     /* la colonna torna su "Non inviato": se resta su Inviato sembra fatto */
-    riga.tgConsInviato = 'Non inviato';
+    riga.tgConsInviato = '❌ Fallito';
     await riga.save().catch(() => {});
     await segnaNelDiario('telegram', 'errore', 'avviso al consulente', e.message, riga.nome || '');
 
@@ -4655,13 +4681,13 @@ async function mandaMessaggioAlCliente(riga) {
     });
 
     await mandaWhatsapp(riga.telefonoCliente, testo);
-    riga.mexClienteInviato = 'Inviato';
+    riga.mexClienteInviato = '✅ Inviato';
     riga.mexInviatoIl = new Date();
     await riga.save();
     await segnaNelDiario('whatsapp', 'ok', 'messaggio al cliente', riga.nome || '', riga.telefonoCliente);
     return { fatto: true, a: riga.telefonoCliente };
   } catch (e) {
-    riga.mexClienteInviato = 'Non inviato';
+    riga.mexClienteInviato = '❌ Fallito';
     await riga.save().catch(() => {});
     await segnaNelDiario('whatsapp', 'errore', 'messaggio al cliente', e.message, riga.nome || '');
     return { fatto: false, motivo: e.message };
