@@ -264,6 +264,9 @@ const ConcorrenzaSchema = new mongoose.Schema({
   statoSviluppo: { type: String, default: 'Informazione' }, // Informazione | Individuato proprietario | Opportunity
   dataAnnuncio: { type: String, default: '20/07/2026' },
   link: { type: String, default: '' },
+  idImmobiliare: { type: String, default: '' }, // id numerico dell'annuncio su immobiliare.it: chiave stabile per riconoscere i doppioni
+  mq: { type: Number, default: null },          // superficie in mq, presa dallo scraping (prima l'archivio non la registrava)
+  dataUltimoMonitoraggio: { type: String, default: '' }, // gg/mm/aaaa dell'ultima scansione automatica che ha rivisto l'annuncio
   statoAnnuncio: { type: String, default: 'Attivo' }, // 'Attivo' | 'Ritirato' | 'Venduto' (modificabile a mano dalla tabella)
   lat: { type: Number, default: null },  // coordinate calcolate una volta sola e riusate dalla mappa
   lng: { type: Number, default: null }
@@ -1157,36 +1160,81 @@ app.post('/api/concorrenza/massivo', async (req, res) => {
   try {
     const righeRicevute = req.body;
 
+    // Raccolgo, per ogni agenzia citata nel file, i contatti trovati dallo scraping
+    // (sede/telefono/mail): servono a riempire la scheda in Capitale Sociale. Tengo il
+    // primo valore non vuoto che incontro per ciascun campo.
+    const contattiPerAgenzia = new Map(); // nomeLower -> { sede, telefono, mail }
+    righeRicevute.forEach(r => {
+      const nome = (r.agenzia || '').trim();
+      if (!nome || nome.toLowerCase() === 'n.d.' || nome.toLowerCase() === 'concorrente') return;
+      const chiave = nome.toLowerCase();
+      const attuale = contattiPerAgenzia.get(chiave) || { sede: '', telefono: '', mail: '' };
+      if (!attuale.sede && r.agenziaSede) attuale.sede = String(r.agenziaSede).trim();
+      if (!attuale.telefono && r.agenziaTelefono) attuale.telefono = String(r.agenziaTelefono).trim();
+      if (!attuale.mail && r.agenziaMail) attuale.mail = String(r.agenziaMail).trim();
+      contattiPerAgenzia.set(chiave, attuale);
+    });
+
     // Per ogni nome di agenzia presente nel file, cerca l'Agenzia Immobiliare già censita (per nome,
-    // senza distinguere maiuscole/minuscole); se non esiste ancora, la crea al volo.
+    // senza distinguere maiuscole/minuscole). Se non esiste, la crea al volo con i contatti trovati.
+    // Se esiste ma le manca sede/telefono/mail, li riempie SENZA sovrascrivere quello che c'è già
+    // (così non calpesta un dato inserito a mano).
     const agenzieEsistenti = await AgenziaImmobiliare.find({});
     const mappaNomeAgenziaId = new Map(agenzieEsistenti.map(a => [a.nomeAgenzia.trim().toLowerCase(), a._id.toString()]));
 
     const nomiAgenziaNelFile = [...new Set(
       righeRicevute.map(r => (r.agenzia || '').trim()).filter(nome => nome && nome.toLowerCase() !== 'n.d.' && nome.toLowerCase() !== 'concorrente')
     )];
+    let agenzieNuoveCreate = 0;
+    let agenzieArricchite = 0;
     for (const nomeAgenzia of nomiAgenziaNelFile) {
-      if (!mappaNomeAgenziaId.has(nomeAgenzia.toLowerCase())) {
-        const nuovaAgenzia = await new AgenziaImmobiliare({ nomeAgenzia }).save();
-        mappaNomeAgenziaId.set(nomeAgenzia.toLowerCase(), nuovaAgenzia._id.toString());
+      const chiave = nomeAgenzia.toLowerCase();
+      const contatti = contattiPerAgenzia.get(chiave) || { sede: '', telefono: '', mail: '' };
+      const idEsistente = mappaNomeAgenziaId.get(chiave);
+      if (!idEsistente) {
+        const nuovaAgenzia = await new AgenziaImmobiliare({
+          nomeAgenzia,
+          sede: contatti.sede || '',
+          telefono: contatti.telefono || '',
+          mail: contatti.mail || ''
+        }).save();
+        mappaNomeAgenziaId.set(chiave, nuovaAgenzia._id.toString());
+        agenzieNuoveCreate++;
+      } else {
+        const esistente = agenzieEsistenti.find(a => a._id.toString() === idEsistente);
+        const daAggiornare = {};
+        if (esistente && !esistente.sede && contatti.sede) daAggiornare.sede = contatti.sede;
+        if (esistente && !esistente.telefono && contatti.telefono) daAggiornare.telefono = contatti.telefono;
+        if (esistente && !esistente.mail && contatti.mail) daAggiornare.mail = contatti.mail;
+        if (Object.keys(daAggiornare).length > 0) {
+          await AgenziaImmobiliare.findByIdAndUpdate(idEsistente, { $set: daAggiornare });
+          agenzieArricchite++;
+        }
       }
     }
 
-    const linkGiaPresenti = new Set(
-      (await Concorrenza.find({}, 'link')).map(r => (r.link || '').trim().toLowerCase()).filter(l => l)
-    );
+    // Riconoscimento dei doppioni: uso l'id immobiliare quando c'è (è stabile anche se il link cambia),
+    // altrimenti ripiego sul link come prima.
+    const annunciEsistenti = await Concorrenza.find({}, 'link idImmobiliare');
+    const idGiaPresenti = new Set(annunciEsistenti.map(r => (r.idImmobiliare || '').trim()).filter(x => x));
+    const linkGiaPresenti = new Set(annunciEsistenti.map(r => (r.link || '').trim().toLowerCase()).filter(l => l));
 
     const daInserire = [];
     let saltatiPerDoppione = 0;
+    const idVistiInQuestoImport = new Set();
     const linkVistiInQuestoImport = new Set();
 
     righeRicevute.forEach(riga => {
-      const linkNormalizzato = (riga.link || '').trim().toLowerCase();
-      const eGiaPresente = linkNormalizzato && (linkGiaPresenti.has(linkNormalizzato) || linkVistiInQuestoImport.has(linkNormalizzato));
+      const idNorm = (riga.idImmobiliare || '').trim();
+      const linkNorm = (riga.link || '').trim().toLowerCase();
+      const eGiaPresente =
+        (idNorm && (idGiaPresenti.has(idNorm) || idVistiInQuestoImport.has(idNorm))) ||
+        (linkNorm && (linkGiaPresenti.has(linkNorm) || linkVistiInQuestoImport.has(linkNorm)));
       if (eGiaPresente) {
         saltatiPerDoppione++;
       } else {
-        if (linkNormalizzato) linkVistiInQuestoImport.add(linkNormalizzato);
+        if (idNorm) idVistiInQuestoImport.add(idNorm);
+        if (linkNorm) linkVistiInQuestoImport.add(linkNorm);
         const nomeAgenziaRiga = (riga.agenzia || '').trim().toLowerCase();
         riga.agenziaId = mappaNomeAgenziaId.get(nomeAgenziaRiga) || '';
         daInserire.push(riga);
@@ -1194,7 +1242,7 @@ app.post('/api/concorrenza/massivo', async (req, res) => {
     });
 
     const inseriti = daInserire.length > 0 ? await Concorrenza.insertMany(daInserire) : [];
-    res.status(201).json({ status: 'success', count: inseriti.length, saltatiPerDoppione, agenzieNuoveCreate: nomiAgenziaNelFile.filter(n => !agenzieEsistenti.some(a => a.nomeAgenzia.trim().toLowerCase() === n.toLowerCase())).length });
+    res.status(201).json({ status: 'success', count: inseriti.length, saltatiPerDoppione, agenzieNuoveCreate, agenzieArricchite });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
@@ -1218,6 +1266,34 @@ app.put('/api/concorrenza/:id', async (req, res) => {
     const aggiornato = await Concorrenza.findByIdAndUpdate(req.params.id, { $set: req.body }, { new: true });
     if (!aggiornato) return res.status(404).json({ error: 'Annuncio non trovato' });
     res.status(200).json(aggiornato);
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
+
+
+/* Aggiornamento in blocco dello stato degli annunci dopo una verifica automatica.
+   Lo scanner riapre i link già salvati e manda qui l'esito di ognuno: statoAnnuncio
+   ('Attivo' | 'Ritirato' | 'Venduto') e, se le ha lette, la data dell'annuncio e la
+   data dell'ultimo monitoraggio. Riconosce la riga per idImmobiliare, altrimenti per link.
+   Non crea niente di nuovo: aggiorna solo quello che esiste già. */
+app.post('/api/concorrenza/verifica-stato', async (req, res) => {
+  try {
+    const esiti = Array.isArray(req.body) ? req.body : [];
+    let aggiornati = 0, nonTrovati = 0, senzaDati = 0;
+    for (const e of esiti) {
+      const filtro = (e.idImmobiliare && String(e.idImmobiliare).trim())
+        ? { idImmobiliare: String(e.idImmobiliare).trim() }
+        : (e.link ? { link: e.link } : null);
+      if (!filtro) { nonTrovati++; continue; }
+      const set = {};
+      if (e.statoAnnuncio) set.statoAnnuncio = e.statoAnnuncio;
+      if (e.dataAnnuncio) set.dataAnnuncio = e.dataAnnuncio;
+      if (e.dataUltimoMonitoraggio) set.dataUltimoMonitoraggio = e.dataUltimoMonitoraggio;
+      if (Object.keys(set).length === 0) { senzaDati++; continue; }
+      const r = await Concorrenza.updateOne(filtro, { $set: set });
+      const haTrovato = (r.matchedCount || r.n || 0) > 0;
+      if (haTrovato) aggiornati++; else nonTrovati++;
+    }
+    res.status(200).json({ status: 'success', aggiornati, nonTrovati, senzaDati });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 
