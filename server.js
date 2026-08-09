@@ -2141,24 +2141,25 @@ app.get('/api/pubblico/comparabili', async (req, res) => {
          pescare sessanta annunci senza prezzo e restituire una lista vuota. */
       prezzo: { $regex: '[0-9]' }
     }, { via: 1, civico: 1, comune: 1, paeseVia: 1, prezzo: 1, unita: 1, piano: 1, bagni: 1, contesto: 1,
-         link: 1, agenzia: 1, privato: 1, dataAnnuncio: 1, _id: 0 })
+         link: 1, agenzia: 1, privato: 1, dataAnnuncio: 1, mq: 1, _id: 0 })
       .sort({ updatedAt: -1 }).limit(300);
 
     const numero = (v) => Number(String(v == null ? '' : v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.')) || 0;
-    /* L'archivio Concorrenza non registra la superficie: restituisco quello che c'e'
-       e lascia che sia il consulente a scrivere i metri per gli annunci che sceglie.
-       Prima filtravo su un prezzo al metro che non poteva mai esistere, e il risultato
-       era sempre vuoto. */
+    /* La superficie ora c'e' nell'archivio (campo mq, riempito dallo scraping di
+       immobiliare): quando c'e' la restituisco e calcolo il prezzo al metro. Se manca
+       resta 0, e sara' il consulente a scrivere i metri per gli annunci che sceglie. */
     const utili = righe
       .map(r => {
         const prezzo = numero(r.prezzo);
+        const mq = Number(r.mq) || 0;
+        const alMq = (mq > 0 && prezzo > 0) ? Math.round(prezzo / mq) : 0;
         /* se via e civico non sono compilati uso l'indirizzo completo del vecchio formato */
         const indirizzo = [r.via, r.civico].filter(x => x && x !== 'N.D.').join(' ').trim();
         return { via: indirizzo || (r.paeseVia || ''), civico: '', comune: r.comune || '',
-                 prezzo: prezzo, mq: 0, tipo: r.unita || '', piano: r.piano || '',
+                 prezzo: prezzo, mq: mq, tipo: r.unita || '', piano: r.piano || '',
                  bagni: r.bagni || '', contesto: r.contesto || '', link: r.link || '',
                  fonte: (r.privato ? 'Privato' : (r.agenzia || 'Agenzia')),
-                 data: r.dataAnnuncio || '', alMq: 0 };
+                 data: r.dataAnnuncio || '', alMq: alMq };
       })
       .filter(r => r.prezzo > 0)
       .sort((a, b) => a.prezzo - b.prezzo)
@@ -2750,6 +2751,9 @@ const VolantinoSchema = new mongoose.Schema({
   modello: { type: String, default: '' },
   linkCodice: { type: String, default: '' },
   immagine: { type: String, default: '' },
+  fotoFronte: { type: String, default: '' },   // foto caricata dal broker per il fronte (data URI o URL)
+  fotoRetro: { type: String, default: '' },    // foto per il retro
+  telefono: { type: String, default: '' },     // numeri di riferimento mostrati sul volantino
   zona: { type: String, default: '' },
   quantiStampati: { type: String, default: '' }
 }, { timestamps: true });
