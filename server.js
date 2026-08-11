@@ -2754,6 +2754,7 @@ const VolantinoSchema = new mongoose.Schema({
   fotoFronte: { type: String, default: '' },   // foto caricata dal broker per il fronte (data URI o URL)
   fotoRetro: { type: String, default: '' },    // foto per il retro
   telefono: { type: String, default: '' },     // numeri di riferimento mostrati sul volantino
+  sottotitolo: { type: String, default: '' },  // riga piccola sotto il richiamo del QR (es. "Valutazione istantanea · gratis")
   zona: { type: String, default: '' },
   quantiStampati: { type: String, default: '' }
 }, { timestamps: true });
