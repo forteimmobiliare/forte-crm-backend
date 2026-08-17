@@ -61,7 +61,17 @@ const ConsulenteSchema = new mongoose.Schema({
   ruolo: { type: String, default: 'Junior Assistant' },
   percentualeProvvigione: { type: String, default: '' },  // se vuoto vale quella del ruolo
   areeVisibili: { type: [String], default: [] },
-  consulentiVisibili: { type: [String], default: [] }
+  consulentiVisibili: { type: [String], default: [] },
+  /* Campi PUBBLICI: usati dalla home del sito (sezione Team). Sono separati da
+     quelli interni perche' il ruolo interno (es. "BackOffice") non e' il titolo
+     che si mostra ai clienti, e bio/video/telefono pubblico nel resto del
+     gestionale non servono. */
+  ruoloPubblico: { type: String, default: '' },     // titolo mostrato sul sito (es. "Broker Titolare")
+  bioPubblica: { type: String, default: '' },        // presentazione lunga (puo' contenere <br> e <strong>)
+  videoPubblico: { type: String, default: '' },      // URL di embed YouTube (facoltativo)
+  telefonoPubblico: { type: String, default: '' },   // numero mostrato sul sito
+  pubblicaInHome: { type: Boolean, default: true },  // se appare nella sezione Team della home
+  ordinePubblico: { type: Number, default: 999 }     // ordine nella home (piu' basso = prima)
 }, { timestamps: true });
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
@@ -1001,7 +1011,7 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
 // Modifica generica dei dati anagrafici di un consulente (nome, username, password, mail, telefono, telegram, whatsapp, foto, ruolo)
 app.put('/api/consulenti/:id', async (req, res) => {
   try {
-    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo'];
+    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo', 'ruoloPubblico', 'bioPubblica', 'videoPubblico', 'telefonoPubblico', 'pubblicaInHome', 'ordinePubblico'];
     const aggiornamento = {};
     for (const campo of campiConsentiti) {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
@@ -3543,6 +3553,33 @@ app.get('/api/pubblico/immobili', async (req, res) => {
     });
 
     res.status(200).json(vetrina);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   TEAM PUBBLICO (sezione consulenti della home del sito).
+   Restituisce solo i consulenti da mostrare online e solo i loro dati pubblici.
+   Cosi' la home si aggiorna da sola quando aggiungi/togli un consulente o cambi
+   foto/testi nel gestionale. Nessun dato interno (password, provvigioni,
+   permessi, id telegram...) esce da qui.
+========================================== */
+app.get('/api/pubblico/consulenti', async (req, res) => {
+  try {
+    const righe = await Consulente.find({ pubblicaInHome: { $ne: false } });
+    const team = righe.map(c => ({
+      utente: c.utente || '',
+      nome: c.nomeCognome || '',
+      ruolo: (c.ruoloPubblico || '').trim() || (c.ruolo || ''),
+      foto: c.fotoProfilo || '',
+      bio: c.bioPubblica || '',
+      video: (c.videoPubblico || '').trim(),
+      telefono: (c.telefonoPubblico || '').trim() || (c.telefono || ''),
+      telefonoRaw: ((c.telefonoPubblico || '').trim() || (c.telefono || '')).replace(/[^0-9+]/g, ''),
+      ordine: (typeof c.ordinePubblico === 'number') ? c.ordinePubblico : 999
+    }));
+    // Ordino per "ordinePubblico" (piu' basso prima), poi per nome.
+    team.sort((a, b) => (a.ordine - b.ordine) || a.nome.localeCompare(b.nome));
+    res.status(200).json(team);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
