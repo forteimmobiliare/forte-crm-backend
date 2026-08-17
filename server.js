@@ -875,7 +875,10 @@ const IncaricoSchema = new mongoose.Schema({
   visualizzazioni: { type: String, default: '' },    // quante volte l'annuncio e' stato visto
   contattiRicevuti: { type: String, default: '' },   // richieste arrivate dai portali
   dataAggiornamentoViste: { type: String, default: '' },
-  gestioneDocumenti: { type: mongoose.Schema.Types.Mixed, default: {} } // venditori, provenienza, mutuo, accesso atti, foto, pubblicazione
+  gestioneDocumenti: { type: mongoose.Schema.Types.Mixed, default: {} }, // venditori, provenienza, mutuo, accesso atti, foto, pubblicazione
+  /* Interruttore "Pubblica sul sito": '' = automatico (segue lo stato immobile),
+     'sempre' = mostralo comunque online, 'mai' = tienilo fuori dalla vetrina. */
+  pubblicaSito: { type: String, default: '' }
 }, { timestamps: true });
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
 
@@ -3433,6 +3436,113 @@ app.get('/api/pubblico/immobili-attivi', async (req, res) => {
       riferimento: r.idElemento || '',
       dove: r.posizione || ''
     })).filter(r => r.nome));
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* ==========================================
+   VETRINA PUBBLICA IMMOBILI (per la pagina "immobili" del sito).
+   Prende gli incarichi del CRM e restituisce SOLO i campi pubblici e SOLO gli
+   immobili da mostrare in vetrina. Nessun dato riservato del venditore
+   (telefono, provvigioni, catasto, password) esce mai da qui.
+========================================== */
+
+// Come lo stato dell'incarico decide se e come appare in vetrina.
+// disponibile = in vendita/affitto (prezzo visibile); venduto = concluso (fascia diagonale).
+const STATI_VETRINA_DISPONIBILE = ['On Line'];
+const STATI_VETRINA_VENDUTO = ['Rogitato', 'Prel Ok', 'Da Fare Prel'];
+// Tutti gli altri (Acquisito, Scaduto, Vincolato, vuoto...) di default NON vanno online,
+// a meno che l'interruttore "Pubblica sul sito" sia su 'sempre'.
+
+function _numeroPrezzo(v) {
+  const n = parseInt(String(v || '').replace(/[^0-9]/g, ''), 10);
+  return isNaN(n) ? 0 : n;
+}
+function _contrattoPubblico(tip) {
+  const t = String(tip || '').trim().toLowerCase();
+  if (t.includes('affitto a riscatto') || t.includes('riscatto')) return 'affitto a riscatto';
+  if (t.includes('affitto') || t.includes('locazione')) return 'affitto';
+  if (t.includes('asta')) return 'asta';
+  return 'vendita';
+}
+function _fotoArrayIncarico(inc) {
+  const out = [];
+  const spingi = (s) => {
+    if (!s) return;
+    const link = String(s).match(/https?:\/\/[^\s,;"']+/g) || [];
+    link.forEach(l => { if (!out.includes(l)) out.push(l); });
+  };
+  spingi(inc.foto);
+  (inc.fotoAllegati || []).forEach(spingi);
+  return out;
+}
+
+app.get('/api/pubblico/immobili', async (req, res) => {
+  try {
+    const [incarichi, consulenti] = await Promise.all([
+      Incarico.find({}).sort({ createdAt: -1 }).limit(500),
+      Consulente.find({}).select('nomeCognome telefono fotoProfilo utente ruolo')
+    ]);
+
+    // Mappa username -> dati pubblici del consulente
+    const mappaCons = {};
+    consulenti.forEach(c => {
+      mappaCons[(c.utente || '').toLowerCase().trim()] = {
+        nome: c.nomeCognome || '',
+        ruolo: c.ruolo || '',
+        foto: c.fotoProfilo || '',
+        telefono: c.telefono || '',
+        telefonoRaw: String(c.telefono || '').replace(/[^0-9+]/g, '')
+      };
+    });
+
+    const vetrina = [];
+    incarichi.forEach(inc => {
+      const stato = String(inc.statoImmobile || '').trim();
+      const flag = String(inc.pubblicaSito || '').trim().toLowerCase();
+
+      if (flag === 'mai') return; // escluso a mano
+
+      const eDisponibile = STATI_VETRINA_DISPONIBILE.includes(stato);
+      const eVenduto = STATI_VETRINA_VENDUTO.includes(stato);
+      const autoMostra = eDisponibile || eVenduto;
+
+      // In automatico mostro solo gli stati previsti; 'sempre' forza comunque online.
+      if (flag !== 'sempre' && !autoMostra) return;
+
+      // Se forzo online uno stato "non venduto" (es. Acquisito), lo tratto come disponibile.
+      const isVenduto = eVenduto;
+
+      const cons = mappaCons[(inc.consulente || '').toLowerCase().trim()] || null;
+
+      vetrina.push({
+        rif: inc.idElemento || String(inc._id),
+        titolo: inc.nome || '',
+        contratto: _contrattoPubblico(inc.tipologiaContratto),
+        isVenduto: isVenduto,
+        comune: inc.comune || '',
+        via: inc.via || '',
+        civico: inc.civico || '',
+        contesto: inc.contesto || '',
+        tipologia: inc.tipologiaUnita || '',
+        prezzo: _numeroPrezzo(inc.prezzoIncarico),
+        locali: parseInt(inc.locali) || 0,
+        mq: parseInt(inc.mq) || 0,
+        bagni: parseInt(inc.bagni) || 0,
+        piano: inc.piano || 'N.D.',
+        ascensore: inc.ascensore || 'NO',
+        ape: inc.classeApe || 'N.D.',
+        speseCondominiali: inc.speseCondominiali || '',
+        prossimoOh: inc.nextOpenHouse || '',
+        linkVideo: (inc.linkVideo || '').trim(),
+        linkVirtual: (inc.linkVirtualTour || '').trim(),
+        linkDoc: (inc.linkDocumenti || '').trim(),
+        descrizione: inc.testoAnnuncio || '',
+        foto: _fotoArrayIncarico(inc),
+        consulente: cons
+      });
+    });
+
+    res.status(200).json(vetrina);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
