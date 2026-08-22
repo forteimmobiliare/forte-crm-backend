@@ -71,7 +71,12 @@ const ConsulenteSchema = new mongoose.Schema({
   videoPubblico: { type: String, default: '' },      // URL di embed YouTube (facoltativo)
   telefonoPubblico: { type: String, default: '' },   // numero mostrato sul sito
   pubblicaInHome: { type: Boolean, default: true },  // se appare nella sezione Team della home
-  ordinePubblico: { type: Number, default: 999 }     // ordine nella home (piu' basso = prima)
+  ordinePubblico: { type: Number, default: 999 },    // ordine nella home (piu' basso = prima)
+  /* Agenda settimanale tipo PERSONALIZZATA di questo consulente: fasce fisse
+     ricorrenti mostrate come sfondo nel calendario (Giorno/Settimana). La
+     imposta il Broker. Se vuota, il CRM usa l'agenda predefinita del team.
+     Ogni voce: { giorno (0=lun..6=dom), inizio, fine (ore decimali), label, colore }. */
+  agendaTipo: { type: Array, default: [] }
 }, { timestamps: true });
 const Consulente = mongoose.model('Consulente', ConsulenteSchema);
 
@@ -1011,7 +1016,7 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
 // Modifica generica dei dati anagrafici di un consulente (nome, username, password, mail, telefono, telegram, whatsapp, foto, ruolo)
 app.put('/api/consulenti/:id', async (req, res) => {
   try {
-    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo', 'ruoloPubblico', 'bioPubblica', 'videoPubblico', 'telefonoPubblico', 'pubblicaInHome', 'ordinePubblico'];
+    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo', 'ruoloPubblico', 'bioPubblica', 'videoPubblico', 'telefonoPubblico', 'pubblicaInHome', 'ordinePubblico', 'agendaTipo'];
     const aggiornamento = {};
     for (const campo of campiConsentiti) {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
