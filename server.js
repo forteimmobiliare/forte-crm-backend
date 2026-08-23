@@ -583,7 +583,8 @@ const OpportunitySchema = new mongoose.Schema({
   giriAttivita: { type: String, default: '' },
   fonte: { type: String, default: '' },
   fonteBancaDati: { type: String, default: '' },
-  inseritoDa: { type: String, default: '' }
+  inseritoDa: { type: String, default: '' },
+  unitaCensId: { type: String, default: '' }   // _id dell'unità del censimento (proprietario/civico) collegata, per specchio Piano/Mq/proprietario
 }, { timestamps: true });
 const Opportunity = mongoose.model('Opportunity', OpportunitySchema);
 
