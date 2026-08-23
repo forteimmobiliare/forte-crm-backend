@@ -729,9 +729,49 @@ const ValutazioneSchema = new mongoose.Schema({
   piuLivelli: { type: String, default: '' },
   pertinenze: { type: String, default: '' },
   giaVendita: { type: String, default: '' },
-  opportunityId: { type: String, default: '' }   // da quale opportunity è nata (evita doppioni)
+  opportunityId: { type: String, default: '' },   // da quale opportunity è nata (evita doppioni)
+  nReport: { type: Number, default: 0 },           // quante versioni di report sono state salvate
+  ultimoReport: { type: String, default: '' }      // data ISO dell'ultima versione salvata
 }, { timestamps: true });
 const Valutazione = mongoose.model('Valutazione', ValutazioneSchema);
+
+/* Archivio SEPARATO delle versioni del report di valutazione: i PDF/fascicoli
+   (HTML pesante) stanno qui, non nella valutazione, così l'elenco resta veloce. */
+const ReportVersioneSchema = new mongoose.Schema({
+  valutazioneId: { type: String, required: true, index: true },
+  html: { type: String, default: '' },
+  firma: { type: String, default: '' }
+}, { timestamps: true });
+const ReportVersione = mongoose.model('ReportVersione', ReportVersioneSchema);
+
+// Salva una nuova versione del report e aggiorna il contatore sulla valutazione
+app.post('/api/report-valutazione', async (req, res) => {
+  try {
+    const { valutazioneId, html, firma } = req.body || {};
+    if (!valutazioneId || !html) return res.status(400).json({ error: 'Dati mancanti' });
+    const doc = await new ReportVersione({ valutazioneId, html, firma: firma || '' }).save();
+    const n = await ReportVersione.countDocuments({ valutazioneId });
+    await Valutazione.findByIdAndUpdate(valutazioneId, { $set: { nReport: n, ultimoReport: new Date().toISOString() } });
+    res.status(201).json({ status: 'success', id: String(doc._id), nReport: n });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Elenco versioni di una valutazione (solo metadati, dal più recente), senza l'HTML pesante
+app.get('/api/report-valutazione/:valutazioneId', async (req, res) => {
+  try {
+    const lista = await ReportVersione.find({ valutazioneId: req.params.valutazioneId }, { html: 0 }).sort({ createdAt: -1 });
+    res.status(200).json(lista);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Una singola versione con il suo HTML (per aprirla)
+app.get('/api/report-valutazione/uno/:id', async (req, res) => {
+  try {
+    const doc = await ReportVersione.findById(req.params.id);
+    if (!doc) return res.status(404).json({ error: 'Versione non trovata' });
+    res.status(200).json({ id: String(doc._id), html: doc.html, creato: doc.createdAt });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 /* ==========================================
    4n. COEFFICIENTI DI VALUTAZIONE
