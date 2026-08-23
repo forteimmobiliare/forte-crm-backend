@@ -713,7 +713,23 @@ const ValutazioneSchema = new mongoose.Schema({
   valoreConsigliato: { type: String, default: '' },
   valoreMinimo: { type: String, default: '' },
   valoreMassimo: { type: String, default: '' },
-  valoreAlMq: { type: String, default: '' }
+  valoreAlMq: { type: String, default: '' },
+  /* Campi che arrivano dall'Opportunity quando la Cdv è "Fatta": la valutazione
+     eredita i dati del lead così non si riscrivono a mano. */
+  nome: { type: String, default: '' },
+  telefono: { type: String, default: '' },
+  posizione: { type: String, default: '' },
+  richiesta: { type: String, default: '' },
+  fonte: { type: String, default: '' },
+  dataCdv: { type: String, default: '' },
+  dataPotCdv: { type: String, default: '' },
+  dataProssimaAttivita: { type: String, default: '' },
+  tipologiaContesto: { type: String, default: '' },
+  noteContesto: { type: String, default: '' },
+  piuLivelli: { type: String, default: '' },
+  pertinenze: { type: String, default: '' },
+  giaVendita: { type: String, default: '' },
+  opportunityId: { type: String, default: '' }   // da quale opportunity è nata (evita doppioni)
 }, { timestamps: true });
 const Valutazione = mongoose.model('Valutazione', ValutazioneSchema);
 
