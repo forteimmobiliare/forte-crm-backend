@@ -6867,7 +6867,8 @@ app.delete('/api/viste/:id', async (req, res) => {
 ========================================== */
 const ImpostazioneColonneSchema = new mongoose.Schema({
   tabellaTipo: { type: String, required: true, unique: true },
-  colonneNascosteConsulenti: { type: [String], default: [] }
+  colonneNascosteConsulenti: { type: [String], default: [] },
+  ordineColonne: { type: [String], default: [] }   // ordine delle colonne (chiavi), impostato dal Broker
 }, { timestamps: true });
 const ImpostazioneColonne = mongoose.model('ImpostazioneColonne', ImpostazioneColonneSchema);
 
@@ -6881,9 +6882,13 @@ app.get('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
 
 app.put('/api/impostazioni-colonne/:tabellaTipo', async (req, res) => {
   try {
+    // aggiorno SOLO i campi presenti nel body, così salvare l'ordine non azzera le nascoste (e viceversa)
+    const set = {};
+    if (req.body.colonneNascosteConsulenti !== undefined) set.colonneNascosteConsulenti = req.body.colonneNascosteConsulenti || [];
+    if (req.body.ordineColonne !== undefined) set.ordineColonne = req.body.ordineColonne || [];
     const aggiornato = await ImpostazioneColonne.findOneAndUpdate(
       { tabellaTipo: req.params.tabellaTipo },
-      { $set: { colonneNascosteConsulenti: req.body.colonneNascosteConsulenti || [] } },
+      { $set: set },
       { new: true, upsert: true }
     );
     res.status(200).json({ status: 'success', data: aggiornato });
