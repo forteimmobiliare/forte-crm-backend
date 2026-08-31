@@ -3578,6 +3578,23 @@ function _numeroPrezzo(v) {
   const n = parseInt(String(v || '').replace(/[^0-9]/g, ''), 10);
   return isNaN(n) ? 0 : n;
 }
+/* Ricava via / civico / comune dal campo "Posizione" (testo unico tipo
+   "Via Roma 12, Legnano"), usato come ripiego quando i campi separati sono vuoti.
+   Serve al sito pubblico, che mostra l'indirizzo da via/civico/comune. */
+function _scomponiPosizione(pos) {
+  const s = String(pos || '').trim();
+  if (!s) return { via: '', civico: '', comune: '' };
+  let via = s, comune = '';
+  const iVirgola = s.lastIndexOf(',');
+  if (iVirgola !== -1) {
+    comune = s.slice(iVirgola + 1).trim();
+    via = s.slice(0, iVirgola).trim();
+  }
+  let civico = '';
+  const m = via.match(/\s+(\d+[a-zA-Z]?(?:\s*\/\s*\w+)?)\s*$/);
+  if (m) { civico = m[1].replace(/\s+/g, ''); via = via.slice(0, m.index).trim(); }
+  return { via: via, civico: civico, comune: comune };
+}
 function _contrattoPubblico(tip) {
   const t = String(tip || '').trim().toLowerCase();
   if (t.includes('affitto a riscatto') || t.includes('riscatto')) return 'affitto a riscatto';
@@ -3635,14 +3652,15 @@ app.get('/api/pubblico/immobili', async (req, res) => {
 
       const cons = mappaCons[(inc.consulente || '').toLowerCase().trim()] || null;
 
+      const _pos = _scomponiPosizione(inc.posizione);
       vetrina.push({
         rif: inc.idElemento || String(inc._id),
         titolo: inc.nome || '',
         contratto: _contrattoPubblico(inc.tipologiaContratto),
         isVenduto: isVenduto,
-        comune: inc.comune || '',
-        via: inc.via || '',
-        civico: inc.civico || '',
+        comune: inc.comune || _pos.comune || '',
+        via: inc.via || _pos.via || '',
+        civico: inc.civico || _pos.civico || '',
         contesto: inc.contesto || '',
         tipologia: inc.tipologiaUnita || '',
         prezzo: _numeroPrezzo(inc.prezzoIncarico),
