@@ -369,6 +369,7 @@ const CentralinoSchema = new mongoose.Schema({
      la stessa mail arriva dalla notifica e dal controllo di riserva */
   idMailOrigine: { type: String, default: '', index: true },
   portaleOrigine: { type: String, default: '' },
+  fonteRichiesta: { type: String, default: '' },   // Volantino/Sito Forte/Immobiliare/Idealista/... (auto dai portali, poi modificabile)
   riferimentoImmobile: { type: String, default: '' },
   indirizzoImmobile: { type: String, default: '' },
   descrizioneImmobile: { type: String, default: '' },
@@ -4132,6 +4133,16 @@ async function aChiVa(riferimento, impostazioni) {
   };
 }
 
+/* Dal portale riconosciuto alla voce "Fonte Richiesta" del Centralino.
+   Gli altri canali (Volantino, Sito, social...) restano da scegliere a mano. */
+function _fonteDaPortale(p) {
+  const s = String(p || '').toLowerCase();
+  if (s.includes('immobiliare')) return 'Immobiliare';
+  if (s.includes('idealista')) return 'Idealista';
+  if (s.includes('wikicasa')) return 'Wikicasa';
+  return '';
+}
+
 /* Il giro completo. Ogni passo lascia una riga nel diario: se il messaggio
    non parte lo si scopre da li', non dal cliente che non richiama. */
 async function lavoraMailLead(testo, mittente, oggetto, idGmail) {
@@ -4169,7 +4180,8 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail) {
     telefonoCliente: letto.telefono,
     emailCliente: letto.mail,
     messaggioCliente: letto.messaggio,
-    tipoRichiesta: destinazione.riconosciuto ? 'Richiesta Specifica' : 'Richiesta Generica',
+    tipoRichiesta: 'Mail Richiesta Specifica',
+    fonteRichiesta: _fonteDaPortale(letto.portale || letto.nomePortale),
     stato: 'Da Fare',
     consulente: destinazione.consulente,
     riferimentoImmobile: letto.riferimento || '',
