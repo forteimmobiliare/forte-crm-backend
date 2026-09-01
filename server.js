@@ -3831,6 +3831,19 @@ const PORTALI = [
       riferimento: ['Riferimento', 'Codice'],
       messaggio: ['Messaggio', 'Richiesta']
     }
+  },
+  {
+    /* Modulo del sito immobiliareforte.com: arriva via Formspree */
+    chiave: 'sito',
+    nome: 'Sito Forte',
+    riconosci: (t, m) => /formspree\.io/i.test(m) || /new submission/i.test(t + ' ' + m),
+    etichette: {
+      nome: ['Nome_Cliente', 'Nome Cliente', 'Nome', 'Name'],
+      telefono: ['Telefono_Cliente', 'Telefono Cliente', 'Telefono', 'Phone', 'Tel'],
+      mail: ['Email_Cliente', 'Email Cliente', 'Email', 'E-mail'],
+      riferimento: ['Riferimento_Immobile', 'Immobile_Interesse', 'Riferimento', 'Rif'],
+      messaggio: ['Messaggio', 'Message']
+    }
   }
 ];
 
@@ -4140,12 +4153,35 @@ function _fonteDaPortale(p) {
   if (s.includes('immobiliare')) return 'Immobiliare';
   if (s.includes('idealista')) return 'Idealista';
   if (s.includes('wikicasa')) return 'Wikicasa';
+  if (s.includes('sito') || s.includes('formspree')) return 'Sito Forte';
+  return '';
+}
+
+/* Fonte ricavata dalle ETICHETTE Gmail (l'utente divide i portali per etichetta).
+   Confronta i nomi delle etichette con le voci del menù "Fonte Richiesta". */
+function _fonteDaEtichette(etichette) {
+  const norm = (x) => String(x || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const regole = [
+    ['Immobiliare', ['immobiliare']], ['Idealista', ['idealista']], ['Wikicasa', ['wikicasa']],
+    ['Sito Forte', ['sitoforte', 'formspree']], ['Volantino', ['volantino']],
+    ['Facebook', ['facebook']], ['Instagram', ['instagram']], ['Tik Tok', ['tiktok']],
+    ['Linkedin', ['linkedin']], ['Threads', ['threads']],
+    ['Stato Whatsapp', ['whatsapp']], ['Telegram', ['telegram']], ['X', ['twitter']]
+  ];
+  for (const et of (etichette || [])) {
+    const ne = norm(et);
+    if (!ne) continue;
+    if (ne === 'x') return 'X';
+    for (const [fonte, chiavi] of regole) {
+      if (chiavi.some(k => ne.includes(k))) return fonte;
+    }
+  }
   return '';
 }
 
 /* Il giro completo. Ogni passo lascia una riga nel diario: se il messaggio
    non parte lo si scopre da li', non dal cliente che non richiama. */
-async function lavoraMailLead(testo, mittente, oggetto, idGmail) {
+async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
   const impostazioni = await impostazioniLead();
 
   /* niente doppioni: la stessa mail puo' arrivare dalla notifica e dal
@@ -4175,13 +4211,19 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail) {
 
   const destinazione = await aChiVa(letto.riferimento, impostazioni);
 
+  /* Fonte: prima le etichette Gmail (le metti tu per portale), poi il modulo del
+     sito (Formspree), poi il portale riconosciuto dal testo. */
+  let fonte = _fonteDaEtichette(etichette);
+  if (!fonte && /formspree/i.test((mittente || '') + ' ' + (oggetto || ''))) fonte = 'Sito Forte';
+  if (!fonte) fonte = _fonteDaPortale(letto.portale || letto.nomePortale);
+
   const riga = await Centralino.create({
     nome: letto.nome,
     telefonoCliente: letto.telefono,
     emailCliente: letto.mail,
     messaggioCliente: letto.messaggio,
     tipoRichiesta: 'Mail Richiesta Specifica',
-    fonteRichiesta: _fonteDaPortale(letto.portale || letto.nomePortale),
+    fonteRichiesta: fonte,
     stato: 'Da Fare',
     consulente: destinazione.consulente,
     riferimentoImmobile: letto.riferimento || '',
@@ -4229,7 +4271,7 @@ app.post('/api/lead/in-arrivo', async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.testo) return res.status(400).json({ error: 'Manca il testo della mail' });
-    const esito = await lavoraMailLead(b.testo, b.mittente, b.oggetto, b.idGmail);
+    const esito = await lavoraMailLead(b.testo, b.mittente, b.oggetto, b.idGmail, b.etichette);
     res.status(200).json(esito);
   } catch (err) {
     await segnaNelDiario('lead', 'errore', 'mail in arrivo', err.message, '');
