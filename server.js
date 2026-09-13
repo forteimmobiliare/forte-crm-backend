@@ -3768,10 +3768,22 @@ function _fotoArrayIncarico(inc) {
 
 app.get('/api/pubblico/immobili', async (req, res) => {
   try {
-    const [incarichi, consulenti] = await Promise.all([
+    const [incarichi, consulenti, openhouses] = await Promise.all([
       Incarico.find({}).sort({ createdAt: -1 }).limit(500),
-      Consulente.find({}).select('nomeCognome telefono fotoProfilo utente ruolo')
+      Consulente.find({}).select('nomeCognome telefono fotoProfilo utente ruolo'),
+      OpenHouse.find({}).select('incaricoUfficio data orario stato')
     ]);
+
+    // Prossimo Open House per immobile (il futuro più vicino, non annullato) — come nella riga incarico
+    const _oggiISO = new Date().toISOString().slice(0, 10);
+    const prossimoOhPerImmobile = {};
+    openhouses.forEach(o => {
+      const rif = o.incaricoUfficio;
+      const data = String(o.data || '').slice(0, 10);
+      if (!rif || !data || data < _oggiISO || o.stato === 'Annullato') return;
+      const cur = prossimoOhPerImmobile[rif];
+      if (!cur || data < cur.data) prossimoOhPerImmobile[rif] = { data, orario: o.orario || '' };
+    });
 
     // Mappa username -> dati pubblici del consulente
     const mappaCons = {};
@@ -3824,7 +3836,8 @@ app.get('/api/pubblico/immobili', async (req, res) => {
         ape: inc.classeApe || 'N.D.',
         ipe: inc.ipeApe || '',
         speseCondominiali: inc.speseCondominiali || '',
-        prossimoOh: inc.nextOpenHouse || '',
+        prossimoOh: (prossimoOhPerImmobile[inc.idElemento] || {}).data || '',
+        prossimoOhOrario: (prossimoOhPerImmobile[inc.idElemento] || {}).orario || '',
         linkVideo: (inc.linkVideo || '').trim(),
         linkVirtual: (inc.linkVirtualTour || '').trim(),
         linkDoc: (inc.linkDocumenti || '').trim(),
