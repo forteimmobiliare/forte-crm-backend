@@ -2959,6 +2959,16 @@ const PrenotazioneOpenHouseSchema = new mongoose.Schema({
 }, { timestamps: true });
 const PrenotazioneOpenHouse = mongoose.model('PrenotazioneOpenHouse', PrenotazioneOpenHouseSchema);
 registraRotteScheda('open-house', OpenHouse, 'Open House');
+// DELETE personalizzato (registrato PRIMA del generico così vince): rimuove anche
+// l'evento dal Google Calendar del consulente.
+app.delete('/api/prenotazioni-openhouse/:id', async (req, res) => {
+  try {
+    const pren = await PrenotazioneOpenHouse.findById(req.params.id);
+    if (pren) { try { await invitoPrenotazioneOH(pren, 'CANCEL'); } catch (e) {} }
+    await PrenotazioneOpenHouse.findByIdAndDelete(req.params.id);
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(400).json({ error: err.message }); }
+});
 registraRotteScheda('prenotazioni-openhouse', PrenotazioneOpenHouse, 'Prenotazione Open House');
 
 // ---- Prenotazioni Open House: endpoint PUBBLICI usati dalla pagina /prenota-openhouse ----
@@ -2985,10 +2995,12 @@ app.post('/api/pubblico/openhouse-prenota', async (req, res) => {
     if (!oh) return res.status(404).json({ error: 'Open House non trovato' });
     const esiste = await PrenotazioneOpenHouse.findOne({ openHouseId: String(oh._id), slot, stato: { $ne: 'Annullato' } });
     if (esiste) return res.status(409).json({ error: 'Questa fascia oraria è appena stata presa. Scegline un\'altra.' });
-    await new PrenotazioneOpenHouse({
+    const pren = await new PrenotazioneOpenHouse({
       openHouseId: String(oh._id), consulente: oh.consulente, incaricoUfficio: oh.incaricoUfficio,
       immobile: oh.immobile, data: oh.data, slot, nome: String(nome).trim(), telefono: String(telefono).trim(), note: (note || '').trim()
     }).save();
+    // manda l'invito .ics al consulente di riferimento (compare nel suo Google Calendar)
+    invitoPrenotazioneOH(pren, 'REQUEST');
     res.status(201).json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -6094,6 +6106,114 @@ app.get('/api/pubblico/kpi-app/:utente', async (req, res) => {
    La derivazione delle chiavi è stata verificata contro il test vector RFC 8291.
 ========================================================================== */
 const crypto = require('crypto');
+
+/* ==========================================================================
+   INVITO CALENDARIO via email (semplice): quando un cliente prenota un Open
+   House, mando un invito .ics (METHOD:REQUEST) alla mail del consulente di
+   riferimento. Il suo Google Calendar lo aggiunge da solo. Riuso l'OAuth Gmail
+   già presente (tokenGmail) — NESSUN service account, nessuna nuova config.
+   ========================================================================== */
+// Mail del consulente: prima il campo mail dell'anagrafica, poi inizialeNome+cognome@immobiliareforte.it
+function emailDaConsulente(cons) {
+  if (cons && cons.mail && /@/.test(cons.mail)) return String(cons.mail).trim();
+  const nc = (cons && cons.nomeCognome || '').trim();
+  if (!nc) return '';
+  const parti = nc.split(/\s+/);
+  const iniz = (parti[0] || '').charAt(0);
+  const cognome = parti.length > 1 ? parti.slice(1).join('') : (parti[0] || '');
+  const local = (iniz + cognome).toLowerCase().replace(/[^a-z0-9]/g, '');
+  return local ? local + '@immobiliareforte.it' : '';
+}
+
+// Indirizzo che invia (l'account Gmail collegato); usato come ORGANIZER dell'invito.
+let MITTENTE_GMAIL = '';
+async function mailMittenteGmail() {
+  if (MITTENTE_GMAIL) return MITTENTE_GMAIL;
+  try { const p = await chiediAGmail('/gmail/v1/users/me/profile'); MITTENTE_GMAIL = (p && p.emailAddress) || ''; } catch (e) {}
+  return MITTENTE_GMAIL || 'agenzia@immobiliareforte.it';
+}
+
+function _icsEsc(s) { return String(s == null ? '' : s).replace(/([,;\\])/g, '\\$1').replace(/\r?\n/g, '\\n'); }
+function icsPrenotazione(pren, organizer, attendee, metodo) {
+  const data = String(pren.data || '').slice(0, 10);
+  const slot = String(pren.slot || '').trim();
+  const [h, m] = slot.split(':').map(Number);
+  const dd = data.replace(/-/g, '');
+  const dtStart = dd + 'T' + ('0' + h).slice(-2) + ('0' + m).slice(-2) + '00';
+  const totMin = h * 60 + m + 20, eh = Math.floor(totMin / 60), emin = totMin % 60;
+  const dtEnd = dd + 'T' + ('0' + eh).slice(-2) + ('0' + emin).slice(-2) + '00';
+  const uid = 'oh-' + String(pren._id || Date.now()) + '@immobiliareforte.it';
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Forte Immobiliare//CRM//IT', 'CALSCALE:GREGORIAN',
+    'METHOD:' + (metodo || 'REQUEST'),
+    'BEGIN:VEVENT',
+    'UID:' + uid,
+    'SEQUENCE:' + (metodo === 'CANCEL' ? '1' : '0'),
+    'DTSTAMP:' + stamp,
+    'DTSTART;TZID=Europe/Rome:' + dtStart,
+    'DTEND;TZID=Europe/Rome:' + dtEnd,
+    'SUMMARY:' + _icsEsc('Open House · ' + (pren.nome || 'Visita')),
+    'LOCATION:' + _icsEsc(pren.immobile || ''),
+    'DESCRIPTION:' + _icsEsc('Cliente: ' + (pren.nome || '') + ' — Tel: ' + (pren.telefono || '') + (pren.note ? (' — Note: ' + pren.note) : '')),
+    'ORGANIZER;CN=Forte Immobiliare:mailto:' + organizer,
+    'ATTENDEE;CN=' + _icsEsc(attendee) + ';RSVP=TRUE;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT:mailto:' + attendee,
+    'STATUS:' + (metodo === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'),
+    'END:VEVENT', 'END:VCALENDAR'
+  ].join('\r\n');
+}
+
+// Manda via Gmail una mail con l'invito .ics allegato inline.
+async function inviaInvitoIcs(destinatario, oggetto, testoHtml, ics, metodo) {
+  const token = await tokenGmail();
+  const organizer = await mailMittenteGmail();
+  const boundary = 'forte' + Date.now();
+  const subj = '=?UTF-8?B?' + Buffer.from(oggetto, 'utf8').toString('base64') + '?=';
+  const mime =
+    'From: Forte Immobiliare <' + organizer + '>\r\n' +
+    'To: ' + destinatario + '\r\n' +
+    'Subject: ' + subj + '\r\n' +
+    'MIME-Version: 1.0\r\n' +
+    'Content-Type: multipart/mixed; boundary="' + boundary + '"\r\n\r\n' +
+    '--' + boundary + '\r\n' +
+    'Content-Type: text/html; charset="UTF-8"\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
+    Buffer.from(testoHtml, 'utf8').toString('base64') + '\r\n\r\n' +
+    '--' + boundary + '\r\n' +
+    'Content-Type: text/calendar; charset="UTF-8"; method=' + (metodo || 'REQUEST') + '\r\nContent-Transfer-Encoding: base64\r\n\r\n' +
+    Buffer.from(ics, 'utf8').toString('base64') + '\r\n\r\n' +
+    '--' + boundary + '--';
+  const raw = Buffer.from(mime, 'utf8').toString('base64url');
+  const r = await fetch('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', {
+    method: 'POST', headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ raw })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error('Gmail send: ' + ((j.error && j.error.message) || r.status));
+  return j.id;
+}
+
+// Invito (o annullamento) al consulente per una prenotazione Open House.
+async function invitoPrenotazioneOH(pren, metodo) {
+  try {
+    const data = String(pren.data || '').slice(0, 10);
+    const slot = String(pren.slot || '').trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data) || !/^\d{1,2}:\d{2}$/.test(slot)) return;
+    const cons = await Consulente.findOne({ utente: pren.consulente });
+    const attendee = emailDaConsulente(cons);
+    if (!attendee) return;
+    const organizer = await mailMittenteGmail();
+    const ics = icsPrenotazione(pren, organizer, attendee, metodo || 'REQUEST');
+    const annulla = metodo === 'CANCEL';
+    const oggetto = (annulla ? 'Annullata · ' : 'Open House · ') + (pren.immobile || 'Visita') + ' — ' + data + ' ' + slot;
+    const html = '<div style="font-family:Arial,sans-serif; font-size:14px; color:#1f2b30;">' +
+      '<p>' + (annulla ? 'Prenotazione <b>annullata</b>.' : 'Nuova prenotazione per il tuo Open House.') + '</p>' +
+      '<p><b>Immobile:</b> ' + (pren.immobile || '') + '<br><b>Quando:</b> ' + data + ' ore ' + slot +
+      '<br><b>Cliente:</b> ' + (pren.nome || '') + '<br><b>Telefono:</b> ' + (pren.telefono || '') +
+      (pren.note ? ('<br><b>Note:</b> ' + pren.note) : '') + '</p>' +
+      '<p style="color:#888;">Rispondi all\'invito per aggiungerlo al tuo Google Calendar.</p></div>';
+    await inviaInvitoIcs(attendee, oggetto, html, ics, metodo || 'REQUEST');
+  } catch (e) { console.error('Invito Open House (' + (metodo || 'REQUEST') + '):', e.message); }
+}
 
 // Chiavi VAPID dell'applicazione (generate una volta; la pubblica è nota ai client).
 const VAPID_PUBLIC = process.env.VAPID_PUBLIC || 'BP_po8X1ri7KzFBOSF1_Wsva242bzQZLX1R07SObQhV4KHAPl0pXLzrS_93Nfzw-5nYFFTRQ28XmbKKxDrDNtAk';
