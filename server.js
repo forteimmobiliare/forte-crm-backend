@@ -4420,24 +4420,71 @@ Rispondi SOLO con JSON:
 
 /* Di chi e' questo lead. Se la mail nomina un immobile nostro, va al
    consulente che lo segue: e' lui che sa rispondere. */
-async function aChiVa(riferimento, impostazioni) {
-  if (riferimento) {
-    const pulito = String(riferimento).trim();
-    const incarico = await Incarico.findOne({
+function _destinazioneIncarico(incarico, impostazioni) {
+  return {
+    consulente: incarico.consulente || impostazioni.consulenteRiserva || '',
+    incaricoId: String(incarico._id),
+    immobile: incarico.nome || incarico.idElemento || '',
+    riconosciuto: true
+  };
+}
+
+// Abbina la richiesta a un immobile. Prova, in ordine: riferimento diretto (idElemento/nome),
+// codice IF-xxx ovunque nel testo, id/link del portale, e infine l'INDIRIZZO (via+civico+comune).
+async function aChiVa(riferimento, impostazioni, testoCompleto) {
+  const norm = (s) => String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const rif = String(riferimento || '').trim();
+  const testo = String(testoCompleto || '');
+  const testoN = ' ' + norm(testo) + ' ';
+
+  // 1) riferimento diretto: idElemento esatto o nome contenuto
+  if (rif) {
+    const esc = rif.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const inc = await Incarico.findOne({
       $or: [
-        { idElemento: new RegExp('^\\s*' + pulito.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') },
-        { nome: new RegExp(pulito.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') }
+        { idElemento: new RegExp('^\\s*' + esc + '\\s*$', 'i') },
+        { nome: new RegExp(esc, 'i') }
       ]
     });
-    if (incarico) {
-      return {
-        consulente: incarico.consulente || impostazioni.consulenteRiserva || '',
-        incaricoId: String(incarico._id),
-        immobile: incarico.nome || incarico.idElemento || '',
-        riconosciuto: true
-      };
-    }
+    if (inc) return _destinazioneIncarico(inc, impostazioni);
   }
+
+  // 2) codice IF-xxx trovato ovunque (nel riferimento o nel corpo)
+  const codici = ((rif + ' ' + testo).match(/\bIF[\s\-_]?\d+\b/gi) || [])
+    .map(c => 'IF-' + (c.match(/\d+/) || [''])[0]);
+  for (const cod of [...new Set(codici)]) {
+    const inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*' + cod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') });
+    if (inc) return _destinazioneIncarico(inc, impostazioni);
+  }
+
+  // 3) match sul corpo: id/link portale oppure indirizzo (via + civico + comune)
+  if (testoN.replace(/\s/g, '').length > 3) {
+    const incarichi = await Incarico.find({}, { idElemento: 1, nome: 1, via: 1, civico: 1, comune: 1, posizione: 1, linkAnnuncio: 1, idImmobiliare: 1, consulente: 1 });
+    // 3a) id immobiliare o numero lungo del link annuncio presenti nel testo
+    for (const inc of incarichi) {
+      const idImm = String(inc.idImmobiliare || '').trim();
+      if (idImm && idImm.length >= 5 && testo.indexOf(idImm) !== -1) return _destinazioneIncarico(inc, impostazioni);
+      const m = String(inc.linkAnnuncio || '').match(/(\d{6,})/);
+      if (m && testo.indexOf(m[1]) !== -1) return _destinazioneIncarico(inc, impostazioni);
+    }
+    // 3b) indirizzo: la via (parole significative) è nel testo; bonus se c'è anche il civico e/o il comune
+    let migliore = null, punteggio = 0;
+    for (const inc of incarichi) {
+      const via = norm(inc.via);
+      if (!via) continue;
+      const paroleVia = via.split(' ').filter(w => w.length >= 4 && !/^\d+$/.test(w));
+      if (!paroleVia.length) continue;
+      const viaPresente = paroleVia.every(w => testoN.indexOf(' ' + w) !== -1);
+      if (!viaPresente) continue;
+      let score = paroleVia.length;              // più parole della via combaciano, meglio è
+      const civ = norm(inc.civico), com = norm(inc.comune);
+      if (civ && civ !== 'n d' && new RegExp('(^| )' + civ + '( |$)').test(testoN)) score += 3;
+      if (com && testoN.indexOf(' ' + com + ' ') !== -1) score += 2;
+      if (score > punteggio) { punteggio = score; migliore = inc; }
+    }
+    if (migliore) return _destinazioneIncarico(migliore, impostazioni);
+  }
+
   return {
     consulente: impostazioni.consulenteRiserva || '',
     incaricoId: '', immobile: '', riconosciuto: false
@@ -4507,7 +4554,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
     return { scartata: true, motivo: letto.motivo };
   }
 
-  const destinazione = await aChiVa(letto.riferimento, impostazioni);
+  const destinazione = await aChiVa(letto.riferimento, impostazioni, testo);
 
   /* Fonte: prima le etichette Gmail (le metti tu per portale), poi il modulo del
      sito (Formspree), poi il portale riconosciuto dal testo. */
@@ -4572,7 +4619,7 @@ app.post('/api/lead/prova', async (req, res) => {
     if (letto.nonEunLead) return res.status(200).json({ lead: false, motivo: letto.motivo });
 
     const impostazioni = await impostazioniLead();
-    const dove = await aChiVa(letto.riferimento, impostazioni);
+    const dove = await aChiVa(letto.riferimento, impostazioni, b.testo);
     res.status(200).json({ lead: true, come, letto, destinazione: dove });
   } catch (err) { res.status(200).json({ lead: false, errore: err.message }); }
 });
