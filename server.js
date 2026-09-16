@@ -4644,22 +4644,38 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
     if (gia) return { saltata: true, motivo: 'già lavorata', id: String(gia._id) };
   }
 
-  /* prima il lettore diretto, poi Gemini */
+  /* SMISTAMENTO: prima Gemini fa da filtro (scarta newsletter, avvisi di ricerca,
+     fatture, risposte automatiche); poi, se è una vera richiesta, estraggo i campi
+     col lettore diretto (preciso sui portali noti) completato da Gemini.
+     Il lettore diretto da solo era troppo permissivo: pescava un telefono/mail dal
+     piè di pagina delle newsletter e creava lead spazzatura. */
+  let giudizio = null;
+  try { giudizio = await leggiMailConGemini(testo, mittente, oggetto); } catch (e) { giudizio = null; }
+
+  // Se Gemini dice esplicitamente che NON è una richiesta, scarto (niente riga inutile).
+  if (giudizio && giudizio.nonEunLead) {
+    await segnaNelDiario('lead', 'scartato', 'mail scartata', giudizio.motivo, mittente || '');
+    return { scartata: true, motivo: giudizio.motivo };
+  }
+
+  // Campi: lettore diretto se disponibile, altrimenti quelli letti da Gemini.
   let letto = null;
   try { letto = leggiMailLead(testo, mittente, oggetto); } catch (e) { letto = null; }
 
-  if (!letto) {
-    try {
-      letto = await leggiMailConGemini(testo, mittente, oggetto);
-    } catch (e) {
-      await segnaNelDiario('lead', 'errore', 'lettura mail', e.message, mittente || '');
-      return { errore: e.message };
-    }
+  // Se Gemini non era disponibile e nemmeno il diretto ha letto nulla, non è un lead affidabile.
+  if (!letto && !giudizio) {
+    await segnaNelDiario('lead', 'errore', 'lettura mail', 'nessun lettore disponibile', mittente || '');
+    return { errore: 'lettura non riuscita' };
   }
+  // Gemini non disponibile: mi affido al diretto (comportamento storico).
+  if (!letto) letto = giudizio;
 
-  if (letto.nonEunLead) {
-    await segnaNelDiario('lead', 'scartato', 'mail scartata', letto.motivo, mittente || '');
-    return { scartata: true, motivo: letto.motivo };
+  // Completo i campi mancanti del lettore diretto con quelli di Gemini.
+  if (letto && letto.comeLetta === 'diretta' && giudizio && !giudizio.nonEunLead) {
+    if ((!letto.nome || letto.nome === '(senza nome)') && giudizio.nome) letto.nome = giudizio.nome;
+    if (!letto.telefono && giudizio.telefono) letto.telefono = giudizio.telefono;
+    if (!letto.mail && giudizio.mail) letto.mail = giudizio.mail;
+    if (!letto.riferimento && giudizio.riferimento) letto.riferimento = giudizio.riferimento;
   }
 
   const destinazione = await aChiVa(letto.riferimento, impostazioni, testo);
@@ -4843,7 +4859,7 @@ async function lavoraMailDiGmail(id) {
    Senza filtro il server leggerebbe tutta la posta, comprese cose private. */
 function filtroLead() {
   return process.env.GMAIL_FILTRO ||
-    'is:unread (from:immobiliare.it OR from:idealista.it OR from:casa.it OR from:wikicasa.it)';
+    'is:unread (from:immobiliare.it OR from:idealista.it OR from:casa.it OR from:wikicasa.it OR from:formspree.io) -subject:(newsletter OR webinar OR riepilogo OR alertas OR alert OR "nuovi annunci" OR "scopri il" OR "scopri i" OR novità OR promo OR promozione)';
 }
 
 /* Il controllo di riserva: guarda cosa e' arrivato e non e' stato lavorato */
