@@ -4227,6 +4227,22 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
   };
 }
 
+/* Rimette a posto i contatti: capita che un telefono finisca nel campo mail
+   (o viceversa). Se la "mail" è in realtà un numero e manca il telefono, la
+   sposto; se il "telefono" contiene una @, scambio; scarto le mail non valide. */
+function sistemaContatti(l) {
+  if (!l) return l;
+  let tel = String(l.telefono || '').trim();
+  let mail = String(l.mail || '').trim();
+  const eMail = (s) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s);
+  const eTel = (s) => { const d = s.replace(/[^\d]/g, ''); return !/@/.test(s) && d.length >= 8 && d.length <= 13; };
+  if (/@/.test(tel) && !/@/.test(mail)) { const t = tel; tel = mail; mail = t; }  // scambio
+  if (!tel && eTel(mail)) { tel = mail; mail = ''; }                               // mail che è un numero
+  if (mail && !eMail(mail)) mail = '';                                             // mail non valida -> via
+  l.telefono = tel; l.mail = mail;
+  return l;
+}
+
 
 /* ==========================================================================
    COME SI COMPORTA L'AUTOMAZIONE
@@ -4545,7 +4561,18 @@ async function aChiVa(riferimento, impostazioni, testoCompleto) {
   const testo = String(testoCompleto || '');
   const testoN = ' ' + norm(testo) + ' ';
 
-  // 1) riferimento diretto: idElemento esatto o nome contenuto
+  // 1) codice IF-xxx esplicito, ovunque (nel riferimento o nel corpo della mail).
+  //    È il segnale più affidabile (le mail dei portali scrivono "annuncio: IF-2"):
+  //    deve vincere PRIMA di qualsiasi match "sfumato" per nome/indirizzo, che può
+  //    beccare l'immobile sbagliato.
+  const codici = ((rif + ' ' + testo).match(/\bIF[\s\-_]?\d+\b/gi) || [])
+    .map(c => 'IF-' + (c.match(/\d+/) || [''])[0]);
+  for (const cod of [...new Set(codici)]) {
+    const inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*' + cod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') });
+    if (inc) return _destinazioneIncarico(inc, impostazioni);
+  }
+
+  // 2) riferimento diretto: idElemento esatto o nome contenuto
   if (rif) {
     const esc = rif.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const inc = await Incarico.findOne({
@@ -4554,14 +4581,6 @@ async function aChiVa(riferimento, impostazioni, testoCompleto) {
         { nome: new RegExp(esc, 'i') }
       ]
     });
-    if (inc) return _destinazioneIncarico(inc, impostazioni);
-  }
-
-  // 2) codice IF-xxx trovato ovunque (nel riferimento o nel corpo)
-  const codici = ((rif + ' ' + testo).match(/\bIF[\s\-_]?\d+\b/gi) || [])
-    .map(c => 'IF-' + (c.match(/\d+/) || [''])[0]);
-  for (const cod of [...new Set(codici)]) {
-    const inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*' + cod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') });
     if (inc) return _destinazioneIncarico(inc, impostazioni);
   }
 
@@ -4578,14 +4597,18 @@ async function aChiVa(riferimento, impostazioni, testoCompleto) {
     // 3b) indirizzo: la via (parole significative) è nel testo; bonus se c'è anche il civico e/o il comune
     let migliore = null, punteggio = 0;
     for (const inc of incarichi) {
-      const via = norm(inc.via);
-      if (!via) continue;
-      const paroleVia = via.split(' ').filter(w => w.length >= 4 && !/^\d+$/.test(w));
+      const com = norm(inc.comune);
+      // Se la via strutturata manca, ricavo le parole dell'indirizzo dal nome/posizione:
+      // così anche gli immobili con l'indirizzo scritto solo nel nome vengono agganciati.
+      const viaBase = norm(inc.via) || norm((inc.nome || '') + ' ' + (inc.posizione || ''));
+      if (!viaBase) continue;
+      let paroleVia = viaBase.split(' ').filter(w => w.length >= 4 && !/^\d+$/.test(w));
+      if (com) paroleVia = paroleVia.filter(w => w !== com);   // il comune fa punteggio a parte
       if (!paroleVia.length) continue;
       const viaPresente = paroleVia.every(w => testoN.indexOf(' ' + w) !== -1);
       if (!viaPresente) continue;
       let score = paroleVia.length;              // più parole della via combaciano, meglio è
-      const civ = norm(inc.civico), com = norm(inc.comune);
+      const civ = norm(inc.civico);
       if (civ && civ !== 'n d' && new RegExp('(^| )' + civ + '( |$)').test(testoN)) score += 3;
       if (com && testoN.indexOf(' ' + com + ' ') !== -1) score += 2;
       if (score > punteggio) { punteggio = score; migliore = inc; }
@@ -4677,6 +4700,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
     if (!letto.mail && giudizio.mail) letto.mail = giudizio.mail;
     if (!letto.riferimento && giudizio.riferimento) letto.riferimento = giudizio.riferimento;
   }
+  letto = sistemaContatti(letto);
 
   const destinazione = await aChiVa(letto.riferimento, impostazioni, testo);
 
@@ -4734,17 +4758,26 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
 app.post('/api/lead/prova', async (req, res) => {
   try {
     const b = req.body || {};
-    let letto = leggiMailLead(b.testo, b.mittente, b.oggetto);
-    let come = 'diretta';
-    if (!letto) {
-      letto = await leggiMailConGemini(b.testo, b.mittente, b.oggetto);
-      come = 'gemini';
+    // Stessa logica dello smistamento vero: Gemini fa da filtro, poi estraggo i campi.
+    let giudizio = null;
+    try { giudizio = await leggiMailConGemini(b.testo, b.mittente, b.oggetto); } catch (e) { giudizio = null; }
+    if (giudizio && giudizio.nonEunLead) return res.status(200).json({ lead: false, motivo: giudizio.motivo });
+
+    let letto = null;
+    try { letto = leggiMailLead(b.testo, b.mittente, b.oggetto); } catch (e) { letto = null; }
+    if (!letto && !giudizio) return res.status(200).json({ lead: false, motivo: 'lettura non riuscita' });
+    if (!letto) letto = giudizio;
+    if (letto && letto.comeLetta === 'diretta' && giudizio && !giudizio.nonEunLead) {
+      if ((!letto.nome || letto.nome === '(senza nome)') && giudizio.nome) letto.nome = giudizio.nome;
+      if (!letto.telefono && giudizio.telefono) letto.telefono = giudizio.telefono;
+      if (!letto.mail && giudizio.mail) letto.mail = giudizio.mail;
+      if (!letto.riferimento && giudizio.riferimento) letto.riferimento = giudizio.riferimento;
     }
-    if (letto.nonEunLead) return res.status(200).json({ lead: false, motivo: letto.motivo });
+    letto = sistemaContatti(letto);
 
     const impostazioni = await impostazioniLead();
     const dove = await aChiVa(letto.riferimento, impostazioni, b.testo);
-    res.status(200).json({ lead: true, come, letto, destinazione: dove });
+    res.status(200).json({ lead: true, come: letto.comeLetta || 'gemini', letto, destinazione: dove });
   } catch (err) { res.status(200).json({ lead: false, errore: err.message }); }
 });
 
@@ -5101,9 +5134,12 @@ app.post('/api/centralino/:id/riavvisa', async (req, res) => {
   try {
     const riga = await Centralino.findById(req.params.id);
     if (!riga) return res.status(404).json({ error: 'Riga non trovata' });
-    /* si azzerano gli stati, altrimenti si crederebbe gia' fatto */
+    /* si azzerano gli stati, altrimenti si crederebbe gia' fatto. Vanno azzerati
+       anche i timestamp (tgInviatoIl/mexInviatoIl): sono loro il vero blocco che
+       impediva il rinvio (avvisaPerRigaCentralino salta se il timestamp c'è già). */
     if (req.body && req.body.rifai) {
       riga.tgConsInviato = ''; riga.mexClienteInviato = '';
+      riga.tgInviatoIl = null; riga.mexInviatoIl = null;
     }
     const esiti = await avvisaPerRigaCentralino(riga);
     res.status(200).json(esiti);
