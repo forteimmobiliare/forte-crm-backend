@@ -5077,7 +5077,7 @@ const scheda = await schedaDelConsulente(riga.consulente);
       portale: riga.portaleOrigine || riga.tipoRichiesta || 'Centralino',
       nome: riga.nome || '',
       telefono: riga.telefonoCliente || riga.emailCliente || 'nessun recapito',
-      immobile: riga.riferimentoImmobile || '',
+      immobile: await descrizioneImmobilePerRiga(riga),
       messaggio: String(riga.messaggioCliente || '').slice(0, 300)
     });
 
@@ -5525,6 +5525,26 @@ async function eseguiScenario(scenario, riga, forzato) {
 
 /* L'avviso al consulente. Una funzione sola, diretta, che torna sempre un
    esito leggibile: e' quello che mancava per capire cosa non andava. */
+/* Descrizione dell'immobile per l'avviso al consulente: non solo il codice,
+   ma CODICE · COMUNE · VIA · PREZZO (i pezzi che ci sono). */
+async function descrizioneImmobilePerRiga(riga) {
+  let inc = null;
+  if (riga.incaricoCollegatoId) inc = await Incarico.findById(riga.incaricoCollegatoId).catch(() => null);
+  if (!inc && riga.riferimentoImmobile) {
+    const m = String(riga.riferimentoImmobile).match(/IF[\s\-_]?(\d+)/i);
+    if (m) inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*IF-' + m[1] + '\\s*$', 'i') }).catch(() => null);
+  }
+  if (inc) {
+    let prezzo = String(inc.prezzoIncarico || '').trim();
+    if (prezzo && !/€/.test(prezzo) && /\d/.test(prezzo)) prezzo = '€ ' + prezzo;
+    const parti = [inc.idElemento, inc.comune, inc.via, prezzo]
+      .map(s => String(s || '').trim()).filter(Boolean);
+    const uniq = parti.filter((v, i, a) => a.indexOf(v) === i);
+    if (uniq.length) return uniq.join(' · ');
+  }
+  return String(riga.riferimentoImmobile || '').trim();
+}
+
 async function mandaAvvisoTelegram(riga) {
   const passi = [];
   try {
@@ -5575,19 +5595,7 @@ async function mandaAvvisoTelegram(riga) {
        e' all'incarico, non al testo. Lo prendo da li' e uso il campo della
        riga solo come ripiego — altrimenti la riga del messaggio resta vuota
        proprio quando serve di piu'. */
-    let nomeImmobile = '';
-    let riferimento = '';
-    if (riga.incaricoCollegatoId) {
-      const suo = await Incarico.findById(riga.incaricoCollegatoId).catch(() => null);
-      if (suo) {
-        nomeImmobile = suo.nome || '';
-        riferimento = suo.idElemento || '';
-      }
-    }
-    if (!nomeImmobile) nomeImmobile = riga.riferimentoImmobile || '';
-
-    const descrizioneImmobile = [riferimento, nomeImmobile]
-      .filter(Boolean).filter((v, i, a) => a.indexOf(v) === i).join(' · ');
+    const descrizioneImmobile = await descrizioneImmobilePerRiga(riga);
 
     const testo = riempi(modello, {
       nome: riga.nome || '',
