@@ -4254,6 +4254,17 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
       const pulito = mm[1].replace(/\s+/g, ' ').trim();
       if (pulito && pulito.length > 1 && !/^in attesa di risposta$/i.test(pulito)) messaggio = pulito;
     }
+  } else if (portale.chiave === 'immobiliare') {
+    /* Immobiliare.it: il messaggio sta tra "Hai un nuovo messaggio:" e "Rispondi";
+       la prima riga di quel blocco è il NOME del cliente, la salto. Senza questo
+       l'etichetta "Messaggio" beccava "Hai un nuovo messaggio:" e prendeva il nome. */
+    const mm = testo.match(/nuovo messaggio:?\s*([\s\S]*?)\s*Rispondi\b/i);
+    if (mm && mm[1]) {
+      const righe = mm[1].split('\n').map(s => s.trim()).filter(Boolean);
+      if (righe.length && nome && righe[0].toLowerCase() === String(nome).toLowerCase()) righe.shift();
+      const corpo = righe.join(' ').replace(/\s+/g, ' ').trim();
+      if (corpo && corpo.length > 1) messaggio = corpo;
+    }
   }
   if (!messaggio) messaggio = dopoEtichetta(testo, e.messaggio);
   if (!messaggio) messaggio = testo.slice(0, 400);
@@ -5163,8 +5174,11 @@ app.post('/api/lead/ricorreggi-idealista', async (req, res) => {
     if (!process.env.GMAIL_REFRESH_TOKEN) return res.status(400).json({ error: 'Gmail non configurato' });
     const giorni = parseInt(req.query.giorni) || 60;
     const dryrun = req.query.dryrun === '1' || req.body && req.body.dryrun;
-    const q = encodeURIComponent(`from:idealista.it newer_than:${giorni}d`);
-    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=50`);
+    /* di default rilegge TUTTI i portali; ?portale=immobiliare.it per limitare */
+    const portaleQ = String(req.query.portale || '').trim();
+    const from = portaleQ ? `from:${portaleQ}` : '(from:immobiliare.it OR from:idealista.it OR from:casa.it OR from:wikicasa.it)';
+    const q = encodeURIComponent(`${from} newer_than:${giorni}d`);
+    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=100`);
     const mail = elenco.messages || [];
     const esiti = [];
     for (const m of mail) {
@@ -5195,8 +5209,11 @@ app.post('/api/lead/ricorreggi-idealista', async (req, res) => {
       if (nomeReale && nomeAttualeJunk) modifiche.nome = nomeNuovo;
       /* messaggio: aggiorno solo se ne ho uno vero e quello salvato è il segnaposto */
       const msgNuovo = String(letto.messaggio || '').trim();
-      const msgReale = msgNuovo.length > 3 && !/^in attesa di risposta$/i.test(msgNuovo) && !/^hai un nuovo messaggio/i.test(msgNuovo);
-      const msgAttualeJunk = !riga.messaggioCliente || /in attesa di risposta|^hai un nuovo messaggio/i.test(String(riga.messaggioCliente || ''));
+      const nomeRiga = String(riga.nome || '').trim().toLowerCase();
+      const msgReale = msgNuovo.length > 3 && !/^in attesa di risposta$/i.test(msgNuovo) && !/^hai un nuovo messaggio/i.test(msgNuovo) && msgNuovo.toLowerCase() !== nomeRiga;
+      const msgAttuale = String(riga.messaggioCliente || '');
+      /* "spazzatura" = vuoto, segnaposto, oppure UGUALE AL NOME (bug Immobiliare) */
+      const msgAttualeJunk = !msgAttuale || /in attesa di risposta|^hai un nuovo messaggio/i.test(msgAttuale) || msgAttuale.trim().toLowerCase() === nomeRiga;
       if (msgReale && msgAttualeJunk) modifiche.messaggioCliente = msgNuovo.slice(0, 500);
       if (letto.mail && !riga.emailCliente) modifiche.emailCliente = letto.mail;
       if (!riga.idMailOrigine && m.id) modifiche.idMailOrigine = m.id;
