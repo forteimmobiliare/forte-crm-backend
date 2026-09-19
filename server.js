@@ -4243,18 +4243,19 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
   if (!telefono && !mail) return null;
   if (!nome && !telefono) return null;
 
-  /* Messaggio del cliente. Idealista: il testo vero sta tra la riga della
-     blacklist morosi e il bottone "Rispondi da idealista"; senza questo si
-     pescava l'intestazione ("...in attesa di risposta"). */
-  let messaggio = dopoEtichetta(testo, e.messaggio);
-  if (!messaggio && portale.chiave === 'idealista') {
-    let mm = testo.match(/inquilini morosi\s*([\s\S]*?)\s*Rispondi da idealista/i);
-    if (!mm) mm = testo.match(/in attesa di risposta\s*([\s\S]*?)\s*Rispondi da idealista/i);
+  /* Messaggio del cliente. Idealista PRIMA di tutto: il testo vero sta tra la
+     riga della blacklist morosi e il bottone "Rispondi da idealista". Va fatto
+     prima di dopoEtichetta, perché "Messaggio" matcha "Hai un nuovo messaggio
+     in attesa di risposta" e restituirebbe il segnaposto "in attesa di risposta". */
+  let messaggio = '';
+  if (portale.chiave === 'idealista') {
+    const mm = testo.match(/inquilini morosi\s*([\s\S]*?)\s*Rispondi da idealista/i);
     if (mm && mm[1]) {
       const pulito = mm[1].replace(/\s+/g, ' ').trim();
       if (pulito && pulito.length > 1 && !/^in attesa di risposta$/i.test(pulito)) messaggio = pulito;
     }
   }
+  if (!messaggio) messaggio = dopoEtichetta(testo, e.messaggio);
   if (!messaggio) messaggio = testo.slice(0, 400);
 
   return {
