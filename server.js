@@ -4425,18 +4425,22 @@ async function mandaWhatsappMeta(numero, valori) {
 }
 
 /* Invio via WhatsApp con SPOKI. Su Spoki ogni "automazione" con avvio
-   "Integrazione / API Url" e azione "Template" genera un URL dedicato:
-   facendo POST a quell'URL il template parte verso il numero indicato.
-   Cosi si possono usare TANTI template diversi: uno per automazione/URL.
-   Variabile su Render: SPOKI_API_KEY (header X-Spoki-Api-Key).
-   `automazioneUrl` = l'URL copiato da Spoki per quel template.
-   `dati` = { telefono, nome, cognome, variabili:{...campi dinamici...} } */
-async function mandaWhatsappSpoki(automazioneUrl, dati) {
-  const key = process.env.SPOKI_API_KEY;
-  if (!key) throw new Error('Spoki non configurato (manca SPOKI_API_KEY su Render)');
-  if (!automazioneUrl) throw new Error('Manca l\'URL dell\'automazione Spoki');
+   "Integrazione / API Url" e azione "Template" genera un WEBHOOK URL + una SECRET
+   dedicati: facendo POST a quell'URL (con la secret NEL PAYLOAD) il template
+   parte verso il numero indicato. Cosi si possono usare TANTI template diversi:
+   uno per automazione (ognuno con url+secret suoi).
+   Formato payload Spoki:
+     { secret, phone(required), first_name, last_name, email, custom_fields:{...} }
+   `webhookUrl` = l'URL copiato da Spoki. `dati` = { secret, telefono, nome,
+   cognome, email, custom_fields:{...} }. La secret puo' anche stare in env
+   SPOKI_SECRET (se non passata nella chiamata). */
+async function mandaWhatsappSpoki(webhookUrl, dati) {
+  dati = dati || {};
+  if (!webhookUrl) throw new Error('Manca l\'URL webhook Spoki dell\'automazione');
+  const secret = (dati.secret || process.env.SPOKI_SECRET || '').trim();
+  if (!secret) throw new Error('Manca la secret Spoki (nel payload o SPOKI_SECRET)');
 
-  let tel = String((dati && dati.telefono) || '').replace(/[^\d+]/g, '');
+  let tel = String(dati.telefono || '').replace(/[^\d+]/g, '');
   if (!tel) throw new Error('numero del cliente illeggibile');
   if (!tel.startsWith('+')) {                       // normalizzo a formato internazionale
     tel = tel.replace(/^0+/, '');
@@ -4444,16 +4448,19 @@ async function mandaWhatsappSpoki(automazioneUrl, dati) {
     tel = '+' + tel;
   }
 
-  const corpoObj = Object.assign({
+  const corpoObj = {
+    secret: secret,
     phone: tel,
-    first_name: (dati && dati.nome) || '',
-    last_name: (dati && dati.cognome) || ''
-  }, (dati && dati.variabili) || {});                // eventuali campi dinamici del template
+    first_name: dati.nome || '',
+    last_name: dati.cognome || '',
+    email: dati.email || '',
+    custom_fields: dati.custom_fields || dati.variabili || {}
+  };
   const corpo = JSON.stringify(corpoObj);
 
   let u;
-  try { u = new URL(automazioneUrl); }
-  catch (e) { throw new Error('URL automazione Spoki non valido'); }
+  try { u = new URL(webhookUrl); }
+  catch (e) { throw new Error('URL webhook Spoki non valido'); }
 
   return new Promise((risolvi, rifiuta) => {
     const r = https.request({
@@ -4462,8 +4469,7 @@ async function mandaWhatsappSpoki(automazioneUrl, dati) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(corpo),
-        'X-Spoki-Api-Key': key
+        'Content-Length': Buffer.byteLength(corpo)
       }
     }, (x) => {
       let d = '';
@@ -4483,13 +4489,13 @@ async function mandaWhatsappSpoki(automazioneUrl, dati) {
   });
 }
 
-/* Rotta generica: manda un template WhatsApp via Spoki chiamando l'URL
-   dell'automazione scelta. Il CRM passa quale template usare (url) + il
+/* Rotta generica: manda un template WhatsApp via Spoki chiamando il webhook
+   dell'automazione scelta. Il CRM passa quale template usare (url+secret) + il
    destinatario. Cosi puoi avere template diversi senza toccare il codice. */
 app.post('/api/whatsapp/spoki', async (req, res) => {
   try {
-    const { url, telefono, nome, cognome, variabili } = req.body || {};
-    const esito = await mandaWhatsappSpoki(url, { telefono, nome, cognome, variabili });
+    const { url, secret, telefono, nome, cognome, email, custom_fields, variabili } = req.body || {};
+    const esito = await mandaWhatsappSpoki(url, { secret, telefono, nome, cognome, email, custom_fields, variabili });
     res.status(200).json({ status: 'success', data: esito });
   } catch (e) { res.status(400).json({ error: e.message }); }
 });
