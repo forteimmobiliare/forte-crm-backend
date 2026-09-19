@@ -4231,7 +4231,11 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
     const ms = String(oggetto || '').match(/\bdi\s+(.+?)\s+sul tuo immobile/i);
     if (ms) nome = ms[1].trim();
   }
-  const telefono = telLink || dopoEtichetta(testo, e.telefono) || primoTelefono(testo);
+  let telefono = telLink || dopoEtichetta(testo, e.telefono);
+  /* Idealista: se non c'è il link tel: il cliente NON ha lasciato il numero.
+     NON ripiegare su primoTelefono, che pescherebbe il "Codice dell'annuncio"
+     (8 cifre) scambiandolo per un telefono. Meglio nessun numero che uno falso. */
+  if (!telefono && portale.chiave !== 'idealista') telefono = primoTelefono(testo);
   const mail = mailLink || dopoEtichetta(testo, e.mail) || primaMail(testo);
 
   /* Senza un modo per richiamarlo non e' un lead: e' meglio farlo leggere
@@ -4239,13 +4243,27 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
   if (!telefono && !mail) return null;
   if (!nome && !telefono) return null;
 
+  /* Messaggio del cliente. Idealista: il testo vero sta tra la riga della
+     blacklist morosi e il bottone "Rispondi da idealista"; senza questo si
+     pescava l'intestazione ("...in attesa di risposta"). */
+  let messaggio = dopoEtichetta(testo, e.messaggio);
+  if (!messaggio && portale.chiave === 'idealista') {
+    let mm = testo.match(/inquilini morosi\s*([\s\S]*?)\s*Rispondi da idealista/i);
+    if (!mm) mm = testo.match(/in attesa di risposta\s*([\s\S]*?)\s*Rispondi da idealista/i);
+    if (mm && mm[1]) {
+      const pulito = mm[1].replace(/\s+/g, ' ').trim();
+      if (pulito && pulito.length > 1 && !/^in attesa di risposta$/i.test(pulito)) messaggio = pulito;
+    }
+  }
+  if (!messaggio) messaggio = testo.slice(0, 400);
+
   return {
     portale: portale.chiave, nomePortale: portale.nome,
     nome: nome || '(senza nome)',
     telefono: (telefono || '').replace(/[^\d+\s]/g, '').trim(),
     mail: mail || '',
     riferimento: dopoEtichetta(testo, e.riferimento),
-    messaggio: dopoEtichetta(testo, e.messaggio) || testo.slice(0, 400),
+    messaggio: messaggio,
     comeLetta: 'diretta'
   };
 }
@@ -5164,8 +5182,21 @@ app.post('/api/lead/ricorreggi-idealista', async (req, res) => {
       if (!riga) { esiti.push({ mail: letto.mail || '(?)', nome: letto.nome, tel: letto.telefono, stato: 'nessun lead abbinato' }); continue; }
       const prima = { nome: riga.nome, tel: riga.telefonoCliente };
       const modifiche = {};
-      if (letto.telefono) modifiche.telefonoCliente = letto.telefono;
-      if (letto.nome && letto.nome !== '(senza nome)') modifiche.nome = letto.nome;
+      /* accetto il telefono SOLO se plausibile: con + o almeno 9 cifre.
+         Cosi' non scrivo il "Codice dell'annuncio" (8 cifre) come numero. */
+      const telPulito = String(letto.telefono || '');
+      const telValido = /^\+/.test(telPulito) || telPulito.replace(/\D/g, '').length >= 9;
+      if (telPulito && telValido) modifiche.telefonoCliente = letto.telefono;
+      /* il nome lo tocco solo se quello attuale è spazzatura e il nuovo è un nome vero */
+      const nomeNuovo = String(letto.nome || '').trim();
+      const nomeReale = /^[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’.\s-]{2,}$/.test(nomeNuovo) && !/idealista|tools|annuncio|ricerche/i.test(nomeNuovo);
+      const nomeAttualeJunk = !riga.nome || /idealista|tools|preferita|annuncio|ricerche|senza nome|^ll'|^RRM\b/i.test(String(riga.nome || ''));
+      if (nomeReale && nomeAttualeJunk) modifiche.nome = nomeNuovo;
+      /* messaggio: aggiorno solo se ne ho uno vero e quello salvato è il segnaposto */
+      const msgNuovo = String(letto.messaggio || '').trim();
+      const msgReale = msgNuovo.length > 3 && !/^in attesa di risposta$/i.test(msgNuovo) && !/^hai un nuovo messaggio/i.test(msgNuovo);
+      const msgAttualeJunk = !riga.messaggioCliente || /in attesa di risposta|^hai un nuovo messaggio/i.test(String(riga.messaggioCliente || ''));
+      if (msgReale && msgAttualeJunk) modifiche.messaggioCliente = msgNuovo.slice(0, 500);
       if (letto.mail && !riga.emailCliente) modifiche.emailCliente = letto.mail;
       if (!riga.idMailOrigine && m.id) modifiche.idMailOrigine = m.id;
       if (Object.keys(modifiche).length && !dryrun) await Centralino.updateOne({ _id: riga._id }, { $set: modifiche });
@@ -5676,7 +5707,11 @@ async function descrizioneImmobilePerRiga(riga) {
   if (inc) {
     let prezzo = String(inc.prezzoIncarico || '').trim();
     if (prezzo && !/€/.test(prezzo) && /\d/.test(prezzo)) prezzo = '€ ' + prezzo;
-    const parti = [inc.idElemento, inc.comune, inc.via, prezzo]
+    /* comune/via strutturati; se vuoti uso l'indirizzo dal nome/posizione
+       (spesso l'indirizzo è scritto solo lì) così non esce solo il codice IF */
+    let indirizzo = [inc.comune, inc.via].map(s => String(s || '').trim()).filter(Boolean).join(' · ');
+    if (!indirizzo) indirizzo = String(inc.posizione || inc.nome || '').trim();
+    const parti = [inc.idElemento, indirizzo, prezzo]
       .map(s => String(s || '').trim()).filter(Boolean);
     const uniq = parti.filter((v, i, a) => a.indexOf(v) === i);
     if (uniq.length) return uniq.join(' · ');
