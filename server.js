@@ -4156,10 +4156,10 @@ const PORTALI = [
     nome: 'Idealista',
     riconosci: (t, m) => /idealista/i.test(t + ' ' + m),
     etichette: {
-      nome: ['Nome', 'Contatto', 'Da'],
+      nome: ['Nome'],
       telefono: ['Telefono', 'Tel'],
       mail: ['Email', 'E-mail'],
-      riferimento: ['Riferimento', 'Codice', 'Rif'],
+      riferimento: ['Riferimento', 'Rif'],
       messaggio: ['Messaggio', 'Commento']
     }
   },
@@ -4211,9 +4211,28 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
   if (!portale) return null;
 
   const e = portale.etichette;
-  const nome = dopoEtichetta(testo, e.nome);
-  const telefono = dopoEtichetta(testo, e.telefono) || primoTelefono(testo);
-  const mail = dopoEtichetta(testo, e.mail) || primaMail(testo);
+
+  /* I portali (Idealista in testa) mettono il contatto REALE del cliente nei
+     link: tel:+39... e mailto:cliente@... . Sono la fonte piu' affidabile,
+     perche' nel testo il numero puo' avere spazi ("375 918 1168") e il regex
+     ripiegherebbe sul "Codice annuncio" (8 cifre) sbagliando tutto. */
+  const raw = String(testoGrezzo || '');
+  const telLink = (raw.match(/tel:(\+?[0-9][0-9\s().\-]{6,})/i) || [])[1];
+  let mailLink = '';
+  const mailtoTutti = raw.match(/mailto:([^"'?>\s]+@[^"'?>\s]+)/ig) || [];
+  for (const x of mailtoTutti) {
+    const em = x.replace(/mailto:/i, '');
+    if (!/idealista|immobiliare\.it|casa\.it|wikicasa|noreply|no-reply|return\./i.test(em)) { mailLink = em; break; }
+  }
+
+  let nome = dopoEtichetta(testo, e.nome);
+  /* Idealista: il nome sta nel subject "... di NOME sul tuo immobile" */
+  if ((!nome || nome.length < 2) && portale.chiave === 'idealista') {
+    const ms = String(oggetto || '').match(/\bdi\s+(.+?)\s+sul tuo immobile/i);
+    if (ms) nome = ms[1].trim();
+  }
+  const telefono = telLink || dopoEtichetta(testo, e.telefono) || primoTelefono(testo);
+  const mail = mailLink || dopoEtichetta(testo, e.mail) || primaMail(testo);
 
   /* Senza un modo per richiamarlo non e' un lead: e' meglio farlo leggere
      a Gemini che salvare una riga inutile. */
@@ -5114,6 +5133,46 @@ app.get('/api/lead/caselle-telegram', async (req, res) => {
 app.post('/api/lead/controlla-ora', async (req, res) => {
   try { res.status(200).json(await controlloDiRiserva()); }
   catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* UNA-TANTUM: rilegge le mail Idealista recenti e RICORREGGE i lead già in
+   Centralino (telefono/nome/mail) col lettore aggiornato, senza creare
+   doppioni. Abbina per idMailOrigine, altrimenti per email cliente.
+   Query opzionali: ?giorni=90 (default 60), ?dryrun=1 (solo anteprima). */
+app.post('/api/lead/ricorreggi-idealista', async (req, res) => {
+  try {
+    if (!process.env.GMAIL_REFRESH_TOKEN) return res.status(400).json({ error: 'Gmail non configurato' });
+    const giorni = parseInt(req.query.giorni) || 60;
+    const dryrun = req.query.dryrun === '1' || req.body && req.body.dryrun;
+    const q = encodeURIComponent(`from:idealista.it newer_than:${giorni}d`);
+    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=50`);
+    const mail = elenco.messages || [];
+    const esiti = [];
+    for (const m of mail) {
+      let letto = null;
+      try {
+        const full = await chiediAGmail(`/gmail/v1/users/me/messages/${m.id}?format=full`);
+        const testo = corpoDellaMail(full.payload);
+        if (!testo) continue;
+        letto = leggiMailLead(testo, intestazione(full, 'From'), intestazione(full, 'Subject'));
+      } catch (e) { continue; }
+      if (!letto) continue;
+      letto = sistemaContatti(letto);
+      // trovo il lead esistente: prima per idMail, poi per email cliente
+      let riga = await Centralino.findOne({ idMailOrigine: m.id });
+      if (!riga && letto.mail) riga = await Centralino.findOne({ emailCliente: new RegExp('^' + letto.mail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') });
+      if (!riga) { esiti.push({ mail: letto.mail || '(?)', nome: letto.nome, tel: letto.telefono, stato: 'nessun lead abbinato' }); continue; }
+      const prima = { nome: riga.nome, tel: riga.telefonoCliente };
+      const modifiche = {};
+      if (letto.telefono) modifiche.telefonoCliente = letto.telefono;
+      if (letto.nome && letto.nome !== '(senza nome)') modifiche.nome = letto.nome;
+      if (letto.mail && !riga.emailCliente) modifiche.emailCliente = letto.mail;
+      if (!riga.idMailOrigine && m.id) modifiche.idMailOrigine = m.id;
+      if (Object.keys(modifiche).length && !dryrun) await Centralino.updateOne({ _id: riga._id }, { $set: modifiche });
+      esiti.push({ mail: letto.mail || '(?)', da: prima, a: modifiche, stato: dryrun ? 'anteprima' : 'aggiornato' });
+    }
+    res.status(200).json({ guardate: mail.length, corretti: esiti.filter(e => e.stato === 'aggiornato').length, dettaglio: esiti });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /* Ogni cinque minuti il controllo di riserva; ogni giorno il rinnovo della
