@@ -2213,14 +2213,23 @@ app.put('/api/proposte/:id', async (req, res) => {
 /* ==========================================
    ROTTE API: OPPORTUNITY e CDV
 ========================================== */
-function registraRotteScheda(percorso, Modello, nomeUmano) {
+function registraRotteScheda(percorso, Modello, nomeUmano, opzioni) {
+  opzioni = opzioni || {};
+  /* gli hook girano DOPO aver risposto al client, senza bloccarlo né farlo
+     fallire se l'azione collaterale (es. invito calendario) va storta */
+  const scatena = (fn, doc) => { try { const p = fn(doc); if (p && p.catch) p.catch(() => {}); } catch (e) {} };
+
   app.get(`/api/${percorso}`, async (req, res) => {
     try { res.status(200).json(await Modello.find({}).sort({ createdAt: -1 })); }
     catch (err) { res.status(500).json({ error: err.message }); }
   });
 
   app.post(`/api/${percorso}`, async (req, res) => {
-    try { res.status(201).json({ status: 'success', data: await new Modello(req.body).save() }); }
+    try {
+      const doc = await new Modello(req.body).save();
+      res.status(201).json({ status: 'success', data: doc });
+      if (opzioni.dopoCreazione) scatena(opzioni.dopoCreazione, doc);
+    }
     catch (err) { res.status(400).json({ error: err.message }); }
   });
 
@@ -2232,13 +2241,16 @@ function registraRotteScheda(percorso, Modello, nomeUmano) {
       const aggiornato = await Modello.findByIdAndUpdate(req.params.id, { $set: payload }, { new: true });
       if (!aggiornato) return res.status(404).json({ error: `${nomeUmano} non trovato` });
       res.status(200).json({ status: 'success', data: aggiornato });
+      if (opzioni.dopoModifica) scatena(opzioni.dopoModifica, aggiornato);
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 
   app.delete(`/api/${percorso}/:id`, async (req, res) => {
     try {
+      const doc = opzioni.primaEliminazione ? await Modello.findById(req.params.id).catch(() => null) : null;
       await Modello.findByIdAndDelete(req.params.id);
       res.status(200).json({ status: 'success' });
+      if (opzioni.primaEliminazione && doc) scatena(opzioni.primaEliminazione, doc);
     } catch (err) { res.status(400).json({ error: err.message }); }
   });
 }
@@ -3708,7 +3720,14 @@ const AppuntamentoSchema = new mongoose.Schema({
 }, { timestamps: true });
 
 const Appuntamento = mongoose.model('Appuntamento', AppuntamentoSchema);
-registraRotteScheda('appuntamenti', Appuntamento);
+/* REGOLA: ogni evento del calendario CRM manda un invito al Google Calendar del
+   consulente di riferimento (creazione → invito, modifica → aggiornamento,
+   eliminazione → annullamento). Riusa l'invio .ics via Gmail (nessuna config nuova). */
+registraRotteScheda('appuntamenti', Appuntamento, 'Appuntamento', {
+  dopoCreazione: (a) => invitoAppuntamento(a, 'REQUEST'),
+  dopoModifica:  (a) => invitoAppuntamento(a, 'REQUEST'),
+  primaEliminazione: (a) => invitoAppuntamento(a, 'CANCEL')
+});
 
 /* Quando un appuntamento viene modificato (spostato d'orario o cambiato promemoria),
    azzero il flag così il nuovo promemoria può ripartire. Lo faccio con un hook leggero
@@ -6660,6 +6679,78 @@ async function invitoPrenotazioneOH(pren, metodo) {
       '<p style="color:#888;">Rispondi all\'invito per aggiungerlo al tuo Google Calendar.</p></div>';
     await inviaInvitoIcs(attendee, oggetto, html, ics, metodo || 'REQUEST');
   } catch (e) { console.error('Invito Open House (' + (metodo || 'REQUEST') + '):', e.message); }
+}
+
+/* .ics per un appuntamento del calendario CRM (Appuntamento). UID stabile per
+   id così update/cancel aggiornano lo stesso evento sul Google Calendar del
+   consulente. Se manca l'ora → evento "tutto il giorno". */
+function icsAppuntamento(a, organizer, attendee, metodo) {
+  const data = String(a.data || '').slice(0, 10);
+  const dd = data.replace(/-/g, '');
+  const ora = String(a.ora || '').trim();
+  const uid = 'appuntamento-' + String(a._id || Date.now()) + '@immobiliareforte.it';
+  const stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+  const seq = Math.floor(Date.now() / 1000);   // cresce ad ogni salvataggio → Google prende sempre l'ultima
+  let righeData;
+  if (/^\d{1,2}:\d{2}$/.test(ora)) {
+    const [h, m] = ora.split(':').map(Number);
+    const durata = Number(a.durata) > 0 ? Number(a.durata) : 60;
+    const dtStart = dd + 'T' + ('0' + h).slice(-2) + ('0' + m).slice(-2) + '00';
+    let tot = h * 60 + m + durata; if (tot > 1439) tot = 1439;   // non sforo la mezzanotte
+    const eh = Math.floor(tot / 60), emin = tot % 60;
+    const dtEnd = dd + 'T' + ('0' + eh).slice(-2) + ('0' + emin).slice(-2) + '00';
+    righeData = ['DTSTART;TZID=Europe/Rome:' + dtStart, 'DTEND;TZID=Europe/Rome:' + dtEnd];
+  } else {
+    const gg = new Date(data + 'T00:00:00'); gg.setDate(gg.getDate() + 1);
+    const dopo = gg.toISOString().slice(0, 10).replace(/-/g, '');
+    righeData = ['DTSTART;VALUE=DATE:' + dd, 'DTEND;VALUE=DATE:' + dopo];
+  }
+  const titolo = a.titolo || a.sottotipo || 'Appuntamento';
+  const descr = ['Con: ' + (a.conChi || ''), a.note ? ('Note: ' + a.note) : '']
+    .filter(x => x && !/: $/.test(x)).join(' — ');
+  return [
+    'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Forte Immobiliare//CRM//IT', 'CALSCALE:GREGORIAN',
+    'METHOD:' + (metodo || 'REQUEST'),
+    'BEGIN:VEVENT',
+    'UID:' + uid,
+    'SEQUENCE:' + seq,
+    'DTSTAMP:' + stamp,
+    ...righeData,
+    'SUMMARY:' + _icsEsc(titolo),
+    'LOCATION:' + _icsEsc(a.luogo || ''),
+    'DESCRIPTION:' + _icsEsc(descr),
+    'ORGANIZER;CN=Forte Immobiliare:mailto:' + organizer,
+    'ATTENDEE;CN=' + _icsEsc(attendee) + ';RSVP=TRUE;PARTSTAT=NEEDS-ACTION;ROLE=REQ-PARTICIPANT:mailto:' + attendee,
+    'STATUS:' + (metodo === 'CANCEL' ? 'CANCELLED' : 'CONFIRMED'),
+    'END:VEVENT', 'END:VCALENDAR'
+  ].join('\r\n');
+}
+
+/* Invito (o aggiornamento/annullamento) al consulente per un appuntamento del
+   calendario CRM: gli arriva un invito che entra nel suo Google Calendar. */
+async function invitoAppuntamento(a, metodo) {
+  try {
+    const data = String(a.data || '').slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(data)) return;   // senza data non è un evento di calendario
+    if (!a.consulente) return;                        // senza consulente non so a chi mandarlo
+    const cons = await schedaDelConsulente(a.consulente);
+    const attendee = emailDaConsulente(cons);
+    if (!attendee) return;
+    const organizer = await mailMittenteGmail();
+    const ics = icsAppuntamento(a, organizer, attendee, metodo || 'REQUEST');
+    const annulla = metodo === 'CANCEL';
+    const titolo = a.titolo || a.sottotipo || 'Appuntamento';
+    const quando = data + (a.ora ? (' ore ' + a.ora) : '');
+    const oggetto = (annulla ? 'Annullato · ' : '') + titolo + ' — ' + quando;
+    const html = '<div style="font-family:Arial,sans-serif; font-size:14px; color:#1f2b30;">' +
+      '<p>' + (annulla ? 'Appuntamento <b>annullato</b>.' : 'Nuovo appuntamento nel tuo calendario Forte.') + '</p>' +
+      '<p><b>' + titolo + '</b><br><b>Quando:</b> ' + quando +
+      (a.luogo ? ('<br><b>Luogo:</b> ' + a.luogo) : '') +
+      (a.conChi ? ('<br><b>Con:</b> ' + a.conChi) : '') +
+      (a.note ? ('<br><b>Note:</b> ' + a.note) : '') + '</p>' +
+      '<p style="color:#888;">Rispondi all\'invito per aggiungerlo al tuo Google Calendar.</p></div>';
+    await inviaInvitoIcs(attendee, oggetto, html, ics, metodo || 'REQUEST');
+  } catch (e) { console.error('Invito appuntamento (' + (metodo || 'REQUEST') + '):', e.message); }
 }
 
 // Chiavi VAPID dell'applicazione (generate una volta; la pubblica è nota ai client).
