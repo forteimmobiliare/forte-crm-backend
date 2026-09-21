@@ -6294,7 +6294,7 @@ app.post('/api/pubblico/conferma-appuntamento', async (req, res) => {
     const a = await Appuntamento.findById(id);
     if (!a) return res.status(404).json({ error: 'non trovato' });
     if (String(t || '') !== tokenConferma(a._id)) return res.status(403).json({ error: 'link non valido' });
-    const ok = ['Confermato', 'Da spostare', 'Annullato'];
+    const ok = ['Confermato', 'Da spostare', 'Annullato', 'In ritardo'];
     const es = ok.indexOf(String(esito)) >= 0 ? String(esito) : 'Confermato';
     a.confermaCliente = es;
     a.confermaFeedback = String(feedback || '').slice(0, 500);
@@ -6324,9 +6324,13 @@ const CONFERMA_HTML = "<!doctype html><html lang='it'><head><meta charset='utf-8
 + "+'<button class=si onclick=\"invia(&#39;Confermato&#39;)\">✓ Confermo</button>'"
 + "+'<button class=sp onclick=\"invia(&#39;Da spostare&#39;)\">↻ Devo spostarlo</button>'"
 + "+'<button class=no onclick=\"invia(&#39;Annullato&#39;)\">✕ Non posso venire</button>';}"
-+ "function invia(es){var fb=(document.getElementById('fb')||{}).value||'';document.getElementById('corpo').innerHTML='<div class=sub>Invio…</div>';"
++ "function invia(es,fbArg){var fb=(fbArg!=null)?fbArg:((document.getElementById('fb')||{}).value||'');document.getElementById('corpo').innerHTML='<div class=sub>Invio…</div>';"
 + "fetch('/api/pubblico/conferma-appuntamento',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:ID,t:T,esito:es,feedback:fb})}).then(function(r){if(!r.ok)throw 0;return r.json();}).then(function(){fine(es);}).catch(function(){document.getElementById('corpo').innerHTML='<div class=sub>Errore, riprova.</div>';});}"
-+ "function fine(es){var ic=es==='Confermato'?'✅':(es==='Annullato'?'❌':'🔄');var tx=es==='Confermato'?'Appuntamento confermato!':(es==='Annullato'?'Appuntamento annullato':'Abbiamo ricevuto la richiesta di spostarlo');document.getElementById('corpo').innerHTML='<div class=ok><div class=big>'+ic+'</div><h1>'+tx+'</h1><div class=sub>Grazie, il tuo consulente è stato avvisato.</div></div>';}"
++ "function fine(es){var ic=es==='Confermato'?'✅':(es==='Annullato'?'❌':(es==='In ritardo'?'⏰':'🔄'));var tx=es==='Confermato'?'Appuntamento confermato!':(es==='Annullato'?'Appuntamento annullato':(es==='In ritardo'?'Grazie, avvisiamo subito il consulente':'Abbiamo ricevuto la richiesta di spostarlo'));"
++ "var extra=(es!=='Annullato')?'<div id=imprev style=\"margin-top:20px\"><a onclick=apriImprevisto() style=\"color:#c9a876;cursor:pointer;text-decoration:underline\">Hai avuto un imprevisto?</a></div>':'';"
++ "document.getElementById('corpo').innerHTML='<div class=ok><div class=big>'+ic+'</div><h1>'+tx+'</h1><div class=sub>Grazie, il tuo consulente è stato avvisato.</div></div>'+extra;}"
++ "function apriImprevisto(){document.getElementById('imprev').innerHTML='<div class=sub style=\"margin-bottom:10px\">Cosa è successo?</div>'+'<button class=no onclick=\"invia(&#39;Annullato&#39;)\">✕ Devo annullare l&#39;appuntamento</button>'+'<button class=sp onclick=ritardo()>⏰ Sono in ritardo</button>';}"
++ "function ritardo(){var q=prompt('Di quanto sei in ritardo? (es. 10 minuti)')||'';invia('In ritardo',q?('In ritardo di '+q):'In ritardo');}"
 + "carica();</script></body></html>";
 app.get(['/conferma-appuntamento', '/conferma-appuntamento/'], (req, res) => { res.set('Content-Type', 'text/html; charset=utf-8'); res.send(CONFERMA_HTML); });
 
