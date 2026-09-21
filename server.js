@@ -3759,7 +3759,13 @@ const Appuntamento = mongoose.model('Appuntamento', AppuntamentoSchema);
 registraRotteScheda('appuntamenti', Appuntamento, 'Appuntamento', {
   dopoCreazione: (a) => Promise.all([invitoAppuntamento(a, 'REQUEST'), sincronizzaVisioneDaAppuntamento(a)]),
   dopoModifica:  (a) => Promise.all([invitoAppuntamento(a, 'REQUEST'), sincronizzaVisioneDaAppuntamento(a)]),
-  primaEliminazione: (a) => Promise.all([invitoAppuntamento(a, 'CANCEL'), Visioni.deleteOne({ appuntamentoOrigineId: String(a._id) }).catch(() => {})])
+  primaEliminazione: (a) => Promise.all([
+    invitoAppuntamento(a, 'CANCEL'),
+    Visioni.deleteOne({ appuntamentoOrigineId: String(a._id) }).catch(() => {}),
+    // se l'evento nasceva da una prenotazione Open House, tolgo anche quella
+    // così lo slot torna LIBERO e prenotabile (gli slot devono esserci sempre)
+    (a.prenotazioneOrigineId ? PrenotazioneOpenHouse.deleteOne({ _id: a.prenotazioneOrigineId }).catch(() => {}) : Promise.resolve())
+  ])
 });
 
 /* VISIONE dal calendario (web o app telefono): quando si salva un appuntamento
