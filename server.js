@@ -6302,6 +6302,28 @@ app.post('/api/pubblico/conferma-appuntamento', async (req, res) => {
     if (es === 'Annullato' && a.visioneCollegataId) { try { await Visioni.findByIdAndUpdate(a.visioneCollegataId, { $set: { statoAdv: 'Saltato' } }); } catch (e) {} }
     await a.save();
     res.status(200).json({ status: 'ok', esito: es });
+    /* notifica push al consulente sull'app Agenda Forte (fire-and-forget) */
+    try {
+      if (a.consulente) {
+        const et = es === 'Confermato' ? 'ha confermato' : (es === 'Annullato' ? 'ha ANNULLATO' : (es === 'In ritardo' ? 'è in ritardo per' : 'chiede di spostare'));
+        const em = es === 'Confermato' ? '✅' : (es === 'Annullato' ? '❌' : (es === 'In ritardo' ? '⏰' : '🔄'));
+        // giorno in forma breve italiana + tipologia leggibile
+        const gIt = ['dom', 'lun', 'mar', 'mer', 'gio', 'ven', 'sab'], mIt = ['gen', 'feb', 'mar', 'apr', 'mag', 'giu', 'lug', 'ago', 'set', 'ott', 'nov', 'dic'];
+        const pd = String(a.data || '').slice(0, 10).split('-');
+        const giorno = (pd.length === 3) ? (gIt[new Date(+pd[0], +pd[1] - 1, +pd[2]).getDay()] + ' ' + (+pd[2]) + ' ' + mIt[+pd[1] - 1]) : (a.data || '');
+        const NOMI_SOTTO = { ricerca: 'Ricerca', distribuzione: 'Distribuzione', cdv1: 'Cdv 1', cdv2: 'Cdv 2', visione: 'Visione', gestione: 'Gestione incarico' };
+        const tip = NOMI_SOTTO[a.sottotipo] || (a.sottotipo ? (a.sottotipo.charAt(0).toUpperCase() + a.sottotipo.slice(1)) : 'Appuntamento');
+        // se visione, aggiunge l'immobile
+        let immo = '';
+        if (a.sottotipo === 'visione' && (a.incaricoId || a.immobileVisione)) {
+          const inc = await Incarico.findOne(a.incaricoId ? { _id: a.incaricoId } : { idElemento: a.immobileVisione }).catch(() => null);
+          if (inc) immo = [inc.via, inc.civico, inc.comune].filter(Boolean).join(' ') || (inc.nome || '');
+        }
+        const corpo = (a.conChi || 'Il cliente') + ' ' + et + ' — ' + tip + ' di ' + giorno + (a.ora ? (' alle ' + a.ora) : '')
+          + (immo ? (' · ' + immo) : '') + (a.confermaFeedback ? (' — ' + a.confermaFeedback) : '');
+        inviaPushUtente(a.consulente, { title: em + ' ' + tip, body: corpo, url: '/app', tag: 'conf-' + String(a._id) }).catch(() => {});
+      }
+    } catch (e) {}
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
 /* pagina pubblica che il cliente apre dal link WhatsApp */
