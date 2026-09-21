@@ -6678,7 +6678,11 @@ async function invitoPrenotazioneOH(pren, metodo) {
       (pren.note ? ('<br><b>Note:</b> ' + pren.note) : '') + '</p>' +
       '<p style="color:#888;">Rispondi all\'invito per aggiungerlo al tuo Google Calendar.</p></div>';
     await inviaInvitoIcs(attendee, oggetto, html, ics, metodo || 'REQUEST');
-  } catch (e) { console.error('Invito Open House (' + (metodo || 'REQUEST') + '):', e.message); }
+    await segnaNelDiario('gmail', 'ok', 'invito Open House', 'inviato a ' + attendee, pren.immobile || '');
+  } catch (e) {
+    console.error('Invito Open House (' + (metodo || 'REQUEST') + '):', e.message);
+    try { await segnaNelDiario('gmail', 'errore', 'invito Open House', e.message, (pren && pren.immobile) || ''); } catch (e2) {}
+  }
 }
 
 /* .ics per un appuntamento del calendario CRM (Appuntamento). UID stabile per
@@ -6750,7 +6754,11 @@ async function invitoAppuntamento(a, metodo) {
       (a.note ? ('<br><b>Note:</b> ' + a.note) : '') + '</p>' +
       '<p style="color:#888;">Rispondi all\'invito per aggiungerlo al tuo Google Calendar.</p></div>';
     await inviaInvitoIcs(attendee, oggetto, html, ics, metodo || 'REQUEST');
-  } catch (e) { console.error('Invito appuntamento (' + (metodo || 'REQUEST') + '):', e.message); }
+    await segnaNelDiario('gmail', 'ok', 'invito appuntamento', 'inviato a ' + attendee, titolo);
+  } catch (e) {
+    console.error('Invito appuntamento (' + (metodo || 'REQUEST') + '):', e.message);
+    try { await segnaNelDiario('gmail', 'errore', 'invito appuntamento', e.message, (a && a.titolo) || ''); } catch (e2) {}
+  }
 }
 
 // Chiavi VAPID dell'applicazione (generate una volta; la pubblica è nota ai client).
