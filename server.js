@@ -3099,6 +3099,8 @@ app.delete('/api/prenotazioni-openhouse/:id', async (req, res) => {
     const pren = await PrenotazioneOpenHouse.findById(req.params.id);
     if (pren) { try { await invitoPrenotazioneOH(pren, 'CANCEL'); } catch (e) {} }
     await PrenotazioneOpenHouse.findByIdAndDelete(req.params.id);
+    // rimuovo anche l'evento Visione creato da questa prenotazione
+    try { await Appuntamento.deleteOne({ prenotazioneOrigineId: String(req.params.id) }); } catch (e) {}
     res.status(200).json({ status: 'success' });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
@@ -3134,6 +3136,8 @@ app.post('/api/pubblico/openhouse-prenota', async (req, res) => {
     }).save();
     // manda l'invito .ics al consulente di riferimento (compare nel suo Google Calendar)
     invitoPrenotazioneOH(pren, 'REQUEST');
+    // crea l'evento "Visione" nel calendario CRM (acquirente + immobile + incarico collegato)
+    creaVisioneDaPrenotazione(pren, oh);
     res.status(201).json({ ok: true });
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
@@ -3737,7 +3741,8 @@ const AppuntamentoSchema = new mongoose.Schema({
   immobileVisione: { type: String, default: '' },    // idElemento immobile della visione
   feedbackAdv: { type: String, default: '' },        // Interessa | Valuta | Non Interessa
   testoFeedback: { type: String, default: '' },
-  visioneCollegataId: { type: String, default: '' }  // la Visioni creata da questo evento
+  visioneCollegataId: { type: String, default: '' }, // la Visioni creata da questo evento
+  prenotazioneOrigineId: { type: String, default: '' } // se nasce da una prenotazione Open House
 }, { timestamps: true });
 
 const Appuntamento = mongoose.model('Appuntamento', AppuntamentoSchema);
@@ -6704,6 +6709,37 @@ async function invitoPrenotazioneOH(pren, metodo) {
     console.error('Invito Open House (' + (metodo || 'REQUEST') + '):', e.message);
     try { await segnaNelDiario('gmail', 'errore', 'invito Open House', e.message, (pren && pren.immobile) || ''); } catch (e2) {}
   }
+}
+
+/* Da una prenotazione Open House crea in automatico un evento "Visione" nel
+   calendario CRM del consulente, con acquirente (nome/tel), immobile e INCARICO
+   collegato. Niente doppioni (dedup per prenotazioneOrigineId) e nessun invito
+   .ics doppio: quello lo manda già invitoPrenotazioneOH. */
+async function creaVisioneDaPrenotazione(pren, oh) {
+  try {
+    if (!pren || !pren._id) return null;
+    const gia = await Appuntamento.findOne({ prenotazioneOrigineId: String(pren._id) }).catch(() => null);
+    if (gia) return gia;
+    const rif = String((oh && oh.incaricoUfficio) || pren.incaricoUfficio || '').trim();
+    let inc = null;
+    if (rif) inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*' + rif.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') }).catch(() => null);
+    return await Appuntamento.create({
+      consulente: pren.consulente || (oh && oh.consulente) || '',
+      titolo: 'Visione · ' + (pren.nome || 'Acquirente'),
+      tipo: 'visione', sottotipo: 'visione',
+      data: pren.data || (oh && oh.data) || '',
+      ora: pren.slot || '',
+      durata: 20,
+      luogo: pren.immobile || (oh && oh.immobile) || '',
+      conChi: pren.nome || '',
+      acquirenteTel: pren.telefono || '',
+      immobileVisione: inc ? (inc.idElemento || rif) : rif,
+      incaricoId: inc ? String(inc._id) : '',
+      note: pren.note || '',
+      prenotazioneOrigineId: String(pren._id),
+      creatoDa: 'openhouse'
+    });
+  } catch (e) { console.error('creaVisioneDaPrenotazione:', e.message); return null; }
 }
 
 /* .ics per un appuntamento del calendario CRM (Appuntamento). UID stabile per
