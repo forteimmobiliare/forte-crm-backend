@@ -3981,6 +3981,30 @@ async function sincronizzaVisioneDaAppuntamento(a) {
     let vis = await Visioni.findOne({ appuntamentoOrigineId: String(a._id) }).catch(() => null);
     if (vis) { Object.assign(vis, campi); await vis.save().catch(() => {}); }
     else { vis = await Visioni.create(campi).catch(() => null); }
+    /* (3) LA RIGA IN BANCA DATI PASSA A "FISSATO".
+       Se il cliente prenota dal link (o gli fissiamo noi la visita), la sua
+       richiesta non puo' restare "Da Fix": lo stato lo muove la visita.
+       Non tocco chi ha gia' comprato. */
+    try {
+      let bd = bdId ? await BancaDati.findById(bdId).catch(() => null) : null;
+      if (!bd) {
+        const tel = String(a.acquirenteTel || '').replace(/\D/g, '').slice(-9);
+        if (tel.length >= 6) {
+          const candidati = await BancaDati.find({ telefono: new RegExp(tel + '$') }).catch(() => []);
+          bd = candidati[0] || null;
+        }
+        if (!bd && a.conChi) {
+          bd = await BancaDati.findOne({ nomeCognome: new RegExp('^\\s*' + String(a.conChi).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') }).catch(() => null);
+        }
+      }
+      if (bd && String(bd.statoAdvFix || '') !== 'Venduto' && String(bd.statoAdvFix || '') !== 'Fissato') {
+        bd.statoAdvFix = 'Fissato';
+        if (!bd.immobileFonteRichiesta && immobile) bd.immobileFonteRichiesta = immobile;
+        await bd.save().catch(() => {});
+      }
+      if (bd && !bdId) bdId = String(bd._id);
+    } catch (e) { console.error('Banca Dati su "Fissato":', e.message); }
+
     // rimando i collegamenti sull'appuntamento (senza ripassare dagli hook)
     const patch = {};
     if (vis && vis._id && String(a.visioneCollegataId || '') !== String(vis._id)) patch.visioneCollegataId = String(vis._id);
