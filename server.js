@@ -4109,6 +4109,41 @@ app.get('/api/connessioni/diario', async (req, res) => {
 app.post('/api/connessioni/prova/:servizio', async (req, res) => {
   const servizio = req.params.servizio;
   try {
+    if (servizio === 'gmail') {
+      if (!process.env.GMAIL_REFRESH_TOKEN) {
+        return res.status(200).json({ funziona: false, motivo: 'GMAIL_REFRESH_TOKEN non configurato su Render' });
+      }
+      /* chi siamo: l'indirizzo della casella collegata. Serve a capire subito
+         se il CRM sta guardando la casella giusta. */
+      const profilo = await chiediAGmail('/gmail/v1/users/me/profile');
+      const q = filtroLead();
+      let quante = 0;
+      try {
+        const elenco = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=1');
+        quante = elenco.resultSizeEstimate || (elenco.messages || []).length;
+      } catch (e) {}
+      /* provo a scrivere su una mail qualsiasi (togliendo e rimettendo nulla):
+         se non ho il permesso lo dico qui, senza aspettare la prossima richiesta */
+      let puoScrivere = false;
+      try {
+        const uno = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=1');
+        const id = (uno.messages || [])[0] && uno.messages[0].id;
+        if (id) puoScrivere = await segnaMailLavorata(id, false);
+      } catch (e) {}
+      await segnaNelDiario('gmail', 'ok', 'prova',
+        'casella ' + (profilo.emailAddress || '?') + ' · ' + quante + ' mail nel filtro', '');
+      return res.status(200).json({
+        funziona: true,
+        casella: profilo.emailAddress || '',
+        mailNelFiltro: quante,
+        filtro: q,
+        puoSegnareLetteEStellina: puoScrivere,
+        motivo: puoScrivere
+          ? 'tutto a posto: legge la casella e puo\' segnare le mail'
+          : 'legge la casella, ma NON puo\' segnare letto/stellina: ricollegare Gmail con il permesso gmail.modify'
+      });
+    }
+
     if (servizio === 'gemini') {
       if (!GEMINI_API_KEY) {
         await segnaNelDiario('gemini', 'errore', 'prova', 'chiave non configurata');
