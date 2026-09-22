@@ -1567,7 +1567,8 @@ async function agganciaImmobileCentralino(b) {
     if (/^[0-9a-f]{24}$/i.test(rif)) inc = await Incarico.findById(rif).catch(() => null);
     const cod = codiceIF(rif);
     if (!inc && cod) {
-      inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*' + cod + '\\s*$', 'i') }).catch(() => null);
+      const re = regexCodiceIF(cod);
+      if (re) inc = await Incarico.findOne({ idElemento: re }).catch(() => null);
     }
     if (!inc) inc = await Incarico.findOne({ nome: rif }).catch(() => null);
   }
@@ -4653,9 +4654,23 @@ function leggiMailLead(testoGrezzo, mittente, oggetto) {
 /* Il codice dell'immobile (IF-12) estratto da un testo qualunque. I portali
    scrivono "annuncio: IF-12"; nel campo riferimento finivano invece pezzi di
    frase ("...categoria catastale...") che non legavano niente. */
+/* IL CODICE DELL'IMMOBILE, SCRITTO COME CAPITA. Le mail dei portali lo
+   scrivono in tutti i modi: "IF-128", "IF- 126", "IF 115", "IF_127",
+   "IF.128", "IF n. 128", a volte col trattino lungo copiato da Word
+   (– — ‑ ‒ −). Guardo solo IF seguito da un numero: quello che c'e' in
+   mezzo non conta. Torna sempre la forma pulita "IF-128". */
 function codiceIF(s) {
-  const m = String(s || '').match(/\bIF[\s\-_]?(\d+)\b/i);
-  return m ? 'IF-' + m[1] : '';
+  const testo = String(s || '').replace(/[\u2010-\u2015\u2212]/g, '-');
+  const m = testo.match(/\bIF\s*(?:n\.?|nr\.?|num\.?)?\s*[-_.\/:]*\s*(\d+)\b/i);
+  return m ? 'IF-' + String(parseInt(m[1], 10)) : '';
+}
+
+/* Come ritrovare quel codice in tabella, comunque sia scritto nella scheda
+   immobile (IF-128 / IF 128 / IF128 / IF-0128). */
+function regexCodiceIF(codice) {
+  const numero = String(codice || '').replace(/\D/g, '');
+  if (!numero) return null;
+  return new RegExp('^\\s*IF\\s*[-_.\\/:]*\\s*0*' + numero + '\\s*$', 'i');
 }
 
 /* Rimette a posto i contatti: capita che un telefono finisca nel campo mail
@@ -5081,10 +5096,12 @@ async function aChiVa(riferimento, impostazioni, testoCompleto) {
   //    È il segnale più affidabile (le mail dei portali scrivono "annuncio: IF-2"):
   //    deve vincere PRIMA di qualsiasi match "sfumato" per nome/indirizzo, che può
   //    beccare l'immobile sbagliato.
-  const codici = ((rif + ' ' + testo).match(/\bIF[\s\-_]?\d+\b/gi) || [])
-    .map(c => 'IF-' + (c.match(/\d+/) || [''])[0]);
+  const grezzo = (rif + ' ' + testo).replace(/[\u2010-\u2015\u2212]/g, '-');
+  const codici = (grezzo.match(/\bIF\s*(?:n\.?|nr\.?|num\.?)?\s*[-_.\/:]*\s*\d+\b/gi) || [])
+    .map(c => codiceIF(c)).filter(Boolean);
   for (const cod of [...new Set(codici)]) {
-    const inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*' + cod.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') });
+    const re = regexCodiceIF(cod);
+    const inc = re ? await Incarico.findOne({ idElemento: re }) : null;
     if (inc) return _destinazioneIncarico(inc, impostazioni);
   }
 
@@ -5193,6 +5210,9 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
 
   // Se Gemini dice esplicitamente che NON è una richiesta, scarto (niente riga inutile).
   if (giudizio && giudizio.nonEunLead) {
+    /* la segno letta (niente stellina): non e' una richiesta e non deve
+       tornare sotto gli occhi del controllo ogni cinque minuti */
+    segnaMailLavorata(idGmail, false);
     await segnaNelDiario('lead', 'scartato', 'mail scartata', giudizio.motivo, mittente || '');
     return { scartata: true, motivo: giudizio.motivo };
   }
@@ -5250,7 +5270,10 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
     const gemella = await Centralino.findOne({
       $or: oppure,
       riferimentoImmobile: codiceImmobile,
-      createdAt: { $gte: new Date(Date.now() - 60 * 60 * 1000) }
+      /* tre giorni, quanti ne guarda il filtro della posta: cosi' una
+         richiesta gia' in tabella (anche inserita a mano) non torna doppia
+         quando la stessa mail viene riletta */
+      createdAt: { $gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
     }).catch(() => null);
     if (gemella) {
       if (idGmail && !gemella.idMailOrigine) {
@@ -5263,6 +5286,20 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
         letto.nomePortale || mittente || '');
       return { saltata: true, motivo: 'doppione', id: String(gemella._id) };
     }
+  }
+
+  /* GLI AVVISI DEL PORTALE NON SONO RICHIESTE. Idealista manda "Chiamata
+     ricevuta da un utente interessato": nessun nome, nessun numero, nessuna
+     mail. Prima diventavano righe vuote nel Registro Chiamate. Restano nel
+     diario (si vedono in Connessioni), ma in tabella non entrano piu'.
+     Chi le rivuole accende "avvisaSenzaRecapito" nelle impostazioni lead. */
+  if (senzaRecapito && !impostazioni.avvisaSenzaRecapito) {
+    segnaMailLavorata(idGmail, false);
+    await segnaNelDiario('lead', 'scartato', 'avviso del portale',
+      'niente nome, numero o mail' + (codiceImmobile ? ' · ' + codiceImmobile : '') +
+      (letto.messaggio ? ' · ' + String(letto.messaggio).slice(0, 60) : ''),
+      letto.nomePortale || mittente || '');
+    return { scartata: true, motivo: 'avviso del portale senza recapito' };
   }
 
   const riga = await Centralino.create({
@@ -5279,6 +5316,9 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
     idMailOrigine: idGmail || '',
     portaleOrigine: letto.nomePortale || letto.portale || ''
   });
+
+  /* letta + stellina: in casella si vede subito che questa e' entrata */
+  segnaMailLavorata(idGmail, true);
 
   await segnaNelDiario('lead', 'ok', 'lead creato',
     `${letto.nome} · ${letto.telefono || letto.mail}` +
@@ -5418,6 +5458,51 @@ function chiediAGmail(percorso) {
   }));
 }
 
+/* SEGNO LA MAIL COME PRESA IN CARICO: la tolgo da "da leggere" e le metto la
+   stellina. Cosi' in casella si vede a colpo d'occhio quali richieste sono
+   gia' entrate nel CRM e quali no.
+   Serve il permesso di scrittura su Gmail (scope gmail.modify): se il
+   collegamento ha solo la lettura, Google risponde "insufficient permission"
+   e ce lo scrivo nel diario una volta, senza fermare niente. */
+function segnaMailLavorata(idGmail, conStellina) {
+  if (!idGmail) return Promise.resolve(false);
+  const corpo = JSON.stringify({
+    removeLabelIds: ['UNREAD'],
+    addLabelIds: conStellina === false ? [] : ['STARRED']
+  });
+  return tokenGmail().then(token => new Promise((risolvi) => {
+    const r = https.request({
+      hostname: 'gmail.googleapis.com',
+      path: '/gmail/v1/users/me/messages/' + encodeURIComponent(idGmail) + '/modify',
+      method: 'POST',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(corpo)
+      }
+    }, (x) => {
+      let d = '';
+      x.on('data', p => d += p);
+      x.on('end', () => {
+        let dati = {};
+        try { dati = JSON.parse(d); } catch (e) {}
+        if (dati.error) {
+          /* una riga sola, non una ogni mail: se manca il permesso lo si
+             legge in Connessioni e si rigenera il collegamento */
+          segnaNelDiario('gmail', 'errore', 'stellina sulla mail',
+            (dati.error.message || 'non riuscita') +
+            ' — serve ricollegare Gmail con il permesso di scrittura (gmail.modify)', idGmail)
+            .catch(() => {});
+          return risolvi(false);
+        }
+        risolvi(true);
+      });
+    });
+    r.on('error', () => risolvi(false));
+    r.write(corpo); r.end();
+  })).catch(() => false);
+}
+
 /* Il corpo di una mail sta annidato in parti: lo cerco ovunque sia */
 function corpoDellaMail(parte) {
   if (!parte) return '';
@@ -5454,15 +5539,26 @@ async function lavoraMailDiGmail(id) {
 /* Quali mail guardare: solo quelle non lette che sembrano dei portali.
    Senza filtro il server leggerebbe tutta la posta, comprese cose private. */
 function filtroLead() {
-  return process.env.GMAIL_FILTRO ||
-    'is:unread (from:immobiliare.it OR from:idealista.it OR from:casa.it OR from:wikicasa.it OR from:formspree.io) -subject:(newsletter OR webinar OR riepilogo OR alertas OR alert OR "nuovi annunci" OR "scopri il" OR "scopri i" OR novità OR promo OR promozione)';
+  if (process.env.GMAIL_FILTRO) return process.env.GMAIL_FILTRO;
+  /* PRIMA guardavamo solo le mail NON LETTE (is:unread). Bastava aprire la
+     mail in casella prima che passasse il controllo (ogni 5 minuti) e quella
+     richiesta non entrava piu' nel Centralino: e' cosi' che si sono persi
+     Alexander Intriago, Enrico Hu, Claudinei Burmann e altri.
+     Adesso guardiamo tutte le mail dei portali degli ultimi giorni, lette o
+     no: i doppioni li evita gia' il controllo sull'id della mail. */
+  const giorni = parseInt(process.env.GMAIL_GIORNI, 10) || 3;
+  return 'newer_than:' + giorni + 'd' +
+    ' (from:immobiliare.it OR from:idealista.it OR from:casa.it OR from:wikicasa.it OR from:formspree.io)' +
+    ' -subject:(newsletter OR webinar OR riepilogo OR alertas OR alert OR "nuovi annunci" OR "scopri il" OR "scopri i" OR novità OR promo OR promozione OR promozioni)';
 }
 
 /* Il controllo di riserva: guarda cosa e' arrivato e non e' stato lavorato */
 async function controlloDiRiserva() {
   try {
     const q = encodeURIComponent(filtroLead());
-    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=15`);
+    /* con il filtro che guarda anche le mail gia' lette ne passano di piu':
+       ne leggo 40 per giro, cosi' un arretrato si recupera in una volta */
+    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=40`);
     const mail = elenco.messages || [];
     if (!mail.length) return { guardate: 0 };
 
@@ -5592,6 +5688,49 @@ app.get('/api/lead/caselle-telegram', async (req, res) => {
     });
     res.status(200).json({ pronte: Object.values(viste) });
   } catch (err) { res.status(200).json({ pronte: [], motivo: err.message }); }
+});
+
+/* DIAGNOSI: cosa e' arrivato nella casella e che fine ha fatto.
+   Elenca le mail che il filtro cattura (mittente, oggetto, data) e per
+   ognuna dice se e' gia' diventata una riga del Centralino, se e' stata
+   scartata (e perche'), oppure se non risulta da nessuna parte.
+   Sola lettura: non crea niente e non manda niente. */
+app.get('/api/lead/ultime-mail', async (req, res) => {
+  try {
+    if (!process.env.GMAIL_REFRESH_TOKEN) return res.status(400).json({ error: 'Gmail non collegato' });
+    const giorni = Math.max(1, Math.min(30, parseInt(req.query.giorni, 10) || 2));
+    const quante = Math.max(1, Math.min(60, parseInt(req.query.quante, 10) || 30));
+    /* di norma guardo le stesse mail che guarda l'automazione; con ?tutte=1
+       anche quelle gia' lette, per capire se ne e' sfuggita una */
+    let q = filtroLead();
+    if (req.query.tutte === '1') q = q.replace(/is:unread\s*/i, '');
+    q += ' newer_than:' + giorni + 'd';
+
+    const elenco = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=' + quante);
+    const mail = elenco.messages || [];
+
+    const fuori = [];
+    for (const m of mail) {
+      const dettaglio = await chiediAGmail('/gmail/v1/users/me/messages/' + m.id + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date');
+      const da = intestazione(dettaglio, 'From');
+      const oggetto = intestazione(dettaglio, 'Subject');
+      const quando = new Date(parseInt(dettaglio.internalDate, 10) || Date.now()).toISOString();
+      const riga = await Centralino.findOne({ idMailOrigine: m.id }).catch(() => null);
+      let esito = 'non risulta in Centralino';
+      if (riga) {
+        esito = 'in Centralino: ' + (riga.nome || '(senza nome)') +
+                (riga.riferimentoImmobile ? ' · ' + riga.riferimentoImmobile : '') +
+                ' · ' + (riga.tgConsInviato || 'avviso non partito');
+      } else {
+        const scarto = await Diario.findOne({ servizio: 'lead', esito: 'scartato', origine: new RegExp(String(da).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i') })
+          .sort({ quando: -1 }).catch(() => null);
+        if (scarto) esito = 'scartata: ' + (scarto.dettaglio || '').slice(0, 120);
+      }
+      fuori.push({ id: m.id, quando, da, oggetto, esito });
+    }
+    fuori.sort((a, b) => String(b.quando).localeCompare(String(a.quando)));
+    res.status(200).json({ filtro: q, trovate: fuori.length, mail: fuori });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/api/lead/controlla-ora', async (req, res) => {
@@ -6226,8 +6365,8 @@ async function descrizioneImmobilePerRiga(riga) {
   let inc = null;
   if (riga.incaricoCollegatoId) inc = await Incarico.findById(riga.incaricoCollegatoId).catch(() => null);
   if (!inc && riga.riferimentoImmobile) {
-    const m = String(riga.riferimentoImmobile).match(/IF[\s\-_]?(\d+)/i);
-    if (m) inc = await Incarico.findOne({ idElemento: new RegExp('^\\s*IF-' + m[1] + '\\s*$', 'i') }).catch(() => null);
+    const re = regexCodiceIF(codiceIF(riga.riferimentoImmobile));
+    if (re) inc = await Incarico.findOne({ idElemento: re }).catch(() => null);
   }
   if (inc) {
     let prezzo = String(inc.prezzoIncarico || '').trim();
