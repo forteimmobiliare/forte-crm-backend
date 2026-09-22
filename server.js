@@ -4135,9 +4135,13 @@ app.post('/api/connessioni/prova/:servizio', async (req, res) => {
       }
       await segnaNelDiario('gmail', 'ok', 'prova',
         caselle.map(c => (c.casella || 'non collegata') + ' (' + (c.mailNelFiltro || 0) + ')').join(' · '), '');
+      /* i NOMI delle variabili Gmail presenti su Render (mai i valori):
+         serve a capire se la seconda e' stata scritta con un nome diverso */
+      const variabiliViste = Object.keys(process.env)
+        .filter(k => /GMAIL/i.test(k)).sort();
       return res.status(200).json({
         funziona: caselle.some(c => c.funziona),
-        caselle, filtro: q,
+        caselle, filtro: q, variabiliViste,
         motivo: caselle.length > 1 ? 'due caselle collegate' : 'una sola casella collegata'
       });
     }
@@ -5449,10 +5453,19 @@ let GMAIL_TOKEN = { valore: '', scade: 0 };
    calendario), la seconda si aggiunge con GMAIL_REFRESH_TOKEN_2 senza
    toccare nulla di quello che gia' funziona. */
 const GMAIL_TOKEN_2 = { valore: '', scade: 0 };
+
+/* Il token della seconda casella: accetto i nomi piu' probabili, cosi' un
+   trattino basso di troppo o di meno non fa perdere mezz'ora. */
+function tokenSecondaCasella() {
+  const e = process.env;
+  return e.GMAIL_REFRESH_TOKEN_2 || e.GMAIL_REFRESH_TOKEN2 || e.GMAIL_REFRESH_TOKEN_B ||
+         e.GMAIL_REFRESH_TOKEN_SECONDA || e.GMAIL_REFRESH_TOKEN_RICHIESTE || '';
+}
+
 function caselleGmail() {
   const elenco = [];
   if (process.env.GMAIL_REFRESH_TOKEN) elenco.push('1');
-  if (process.env.GMAIL_REFRESH_TOKEN_2) elenco.push('2');
+  if (tokenSecondaCasella()) elenco.push('2');
   return elenco;
 }
 
@@ -5463,7 +5476,7 @@ async function tokenGmail(quale) {
 
   const id = process.env.GMAIL_CLIENT_ID;
   const segreto = process.env.GMAIL_CLIENT_SECRET;
-  const lungo = seconda ? process.env.GMAIL_REFRESH_TOKEN_2 : process.env.GMAIL_REFRESH_TOKEN;
+  const lungo = seconda ? tokenSecondaCasella() : process.env.GMAIL_REFRESH_TOKEN;
   if (!id || !segreto || !lungo) throw new Error('Gmail non configurato' + (seconda ? ' (seconda casella)' : ''));
 
   const corpo = new URLSearchParams({
