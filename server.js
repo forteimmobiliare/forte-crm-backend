@@ -4027,6 +4027,25 @@ async function sincronizzaVisioneDaAppuntamento(a) {
    accorgendoti che non arrivano piu' lead. Ogni cosa che il server fa da solo
    lascia una riga qui.
 ========================================================================== */
+/* IL TACCUINO DELLE MAIL GIA' VISTE. Prima il CRM capiva di aver gia'
+   lavorato una mail solo perche' trovava la riga nel Centralino: se la riga
+   veniva cancellata a mano (un doppione, una spazzatura), al giro dopo la
+   stessa mail tornava dentro come nuova. Qui resta segnato che quella mail
+   e' gia' passata, comunque sia finita. */
+const MailVistaSchema = new mongoose.Schema({
+  idGmail: { type: String, required: true, unique: true, index: true },
+  esito: { type: String, default: '' },      // creata | scartata | doppione
+  quando: { type: Date, default: Date.now }
+});
+const MailVista = mongoose.model('MailVista', MailVistaSchema);
+
+async function segnaMailVista(idGmail, esito) {
+  if (!idGmail) return;
+  try {
+    await MailVista.updateOne({ idGmail }, { $set: { idGmail, esito, quando: new Date() } }, { upsert: true });
+  } catch (e) {}
+}
+
 const DiarioSchema = new mongoose.Schema({
   servizio: { type: String, default: '' },    // gmail, meta, gemini, immagini
   esito: { type: String, default: 'ok' },     // ok | scartato | errore
@@ -4721,6 +4740,11 @@ function sistemaContatti(l) {
   if (/@/.test(tel) && !/@/.test(mail)) { const t = tel; tel = mail; mail = t; }  // scambio
   if (!tel && eTel(mail)) { tel = mail; mail = ''; }                               // mail che è un numero
   if (mail && !eMail(mail)) mail = '';                                             // mail non valida -> via
+  /* un numero di telefono ha almeno otto cifre: "2026" e' un anno, "26" un
+     civico. Meglio nessun numero che uno finto, che fa perdere tempo a chi
+     chiama e fa passare la richiesta per completa. */
+  if (tel && !/^\+/.test(tel) && tel.replace(/\D/g, '').length < 8) tel = '';
+  if (tel && tel.replace(/\D/g, '').length < 6) tel = '';
   l.telefono = tel; l.mail = mail;
   return l;
 }
@@ -5352,6 +5376,10 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
   if (idGmail) {
     const gia = await Centralino.findOne({ idMailOrigine: idGmail });
     if (gia) return { saltata: true, motivo: 'già lavorata', id: String(gia._id) };
+    /* la riga puo' essere stata cancellata a mano: se la mail risulta gia'
+       passata di qui, non la rimetto dentro */
+    const vista = await MailVista.findOne({ idGmail }).catch(() => null);
+    if (vista) return { saltata: true, motivo: 'già vista il ' + new Date(vista.quando).toLocaleDateString('it-IT') };
   }
 
   /* SMISTAMENTO: prima Gemini fa da filtro (scarta newsletter, avvisi di ricerca,
@@ -5367,6 +5395,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
     /* la segno letta (niente stellina): non e' una richiesta e non deve
        tornare sotto gli occhi del controllo ogni cinque minuti */
     segnaMailLavorata(idGmail, false, casellaGmail);
+    segnaMailVista(idGmail, 'scartata');
     await segnaNelDiario('lead', 'scartato', 'mail scartata', giudizio.motivo, mittente || '');
     return { scartata: true, motivo: giudizio.motivo };
   }
@@ -5419,8 +5448,13 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
      diversi). Niente riga nuova e niente secondo Telegram. */
   if (!senzaRecapito) {
     const oppure = [];
-    if (letto.telefono) oppure.push({ telefonoCliente: letto.telefono });
-    if (letto.mail) oppure.push({ emailCliente: letto.mail });
+    /* il numero va confrontato per le ultime nove cifre: la stessa persona
+       arriva scritta "+39 349 9594 038" da un portale e "3499594038"
+       dall'altro, e con il confronto esatto passava due volte */
+    const cifre = String(letto.telefono || '').replace(/\D/g, '').slice(-9);
+    if (cifre.length >= 6) oppure.push({ telefonoCliente: new RegExp(cifre.split('').join('[\\s.\\-]*') + '$') });
+    else if (letto.telefono) oppure.push({ telefonoCliente: letto.telefono });
+    if (letto.mail) oppure.push({ emailCliente: new RegExp('^' + String(letto.mail).replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') });
     const gemella = await Centralino.findOne({
       $or: oppure,
       riferimentoImmobile: codiceImmobile,
@@ -5434,6 +5468,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
         gemella.idMailOrigine = idGmail;
         await gemella.save().catch(() => {});
       }
+      segnaMailVista(idGmail, 'doppione');
       await segnaNelDiario('lead', 'saltato', 'richiesta doppia',
         (letto.nome || '') + ' · ' + (letto.telefono || letto.mail) +
         (codiceImmobile ? ' · ' + codiceImmobile : '') + ' — gia\' arrivata poco fa',
@@ -5449,6 +5484,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
      Chi le rivuole accende "avvisaSenzaRecapito" nelle impostazioni lead. */
   if (senzaRecapito && !impostazioni.avvisaSenzaRecapito) {
     segnaMailLavorata(idGmail, false, casellaGmail);
+    segnaMailVista(idGmail, 'avviso senza dati');
     await segnaNelDiario('lead', 'scartato', 'avviso del portale',
       'niente nome, numero o mail' + (codiceImmobile ? ' · ' + codiceImmobile : '') +
       (letto.messaggio ? ' · ' + String(letto.messaggio).slice(0, 60) : ''),
@@ -5473,6 +5509,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
 
   /* letta + stellina: in casella si vede subito che questa e' entrata */
   segnaMailLavorata(idGmail, true, casellaGmail);
+  segnaMailVista(idGmail, 'creata');
 
   await segnaNelDiario('lead', 'ok', 'lead creato',
     `${letto.nome} · ${letto.telefono || letto.mail}` +
