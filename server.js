@@ -4110,40 +4110,37 @@ app.post('/api/connessioni/prova/:servizio', async (req, res) => {
   const servizio = req.params.servizio;
   try {
     if (servizio === 'gmail') {
-      if (!process.env.GMAIL_REFRESH_TOKEN) {
+      if (!caselleGmail().length) {
         return res.status(200).json({ funziona: false, motivo: 'GMAIL_REFRESH_TOKEN non configurato su Render' });
       }
-      /* chi siamo: l'indirizzo della casella collegata. Serve a capire subito
-         se il CRM sta guardando la casella giusta. */
-      const profilo = await chiediAGmail('/gmail/v1/users/me/profile');
       const q = filtroLead();
-      let quante = 0;
-      try {
-        const elenco = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=1');
-        quante = elenco.resultSizeEstimate || (elenco.messages || []).length;
-      } catch (e) {}
-      /* provo a scrivere su una mail qualsiasi (togliendo e rimettendo nulla):
-         se non ho il permesso lo dico qui, senza aspettare la prossima richiesta */
-      let puoScrivere = false;
-      try {
-        const uno = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=1');
-        const id = (uno.messages || [])[0] && uno.messages[0].id;
-        if (id) puoScrivere = await segnaMailLavorata(id, false);
-      } catch (e) {}
+      const caselle = [];
+      for (const quale of caselleGmail()) {
+        const riga = { collegamento: quale === '2' ? 'GMAIL_REFRESH_TOKEN_2' : 'GMAIL_REFRESH_TOKEN' };
+        try {
+          const profilo = await chiediAGmail('/gmail/v1/users/me/profile', quale);
+          riga.casella = profilo.emailAddress || '';
+          try {
+            const uno = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=1', quale);
+            riga.mailNelFiltro = uno.resultSizeEstimate || (uno.messages || []).length;
+            const id = (uno.messages || [])[0] && uno.messages[0].id;
+            riga.puoSegnareLetteEStellina = id ? await segnaMailLavorata(id, false, quale) : false;
+          } catch (e) { riga.mailNelFiltro = 0; riga.puoSegnareLetteEStellina = false; }
+          riga.funziona = true;
+        } catch (e) {
+          riga.funziona = false;
+          riga.motivo = e.message;
+        }
+        caselle.push(riga);
+      }
       await segnaNelDiario('gmail', 'ok', 'prova',
-        'casella ' + (profilo.emailAddress || '?') + ' · ' + quante + ' mail nel filtro', '');
+        caselle.map(c => (c.casella || 'non collegata') + ' (' + (c.mailNelFiltro || 0) + ')').join(' · '), '');
       return res.status(200).json({
-        funziona: true,
-        casella: profilo.emailAddress || '',
-        mailNelFiltro: quante,
-        filtro: q,
-        puoSegnareLetteEStellina: puoScrivere,
-        motivo: puoScrivere
-          ? 'tutto a posto: legge la casella e puo\' segnare le mail'
-          : 'legge la casella, ma NON puo\' segnare letto/stellina: ricollegare Gmail con il permesso gmail.modify'
+        funziona: caselle.some(c => c.funziona),
+        caselle, filtro: q,
+        motivo: caselle.length > 1 ? 'due caselle collegate' : 'una sola casella collegata'
       });
     }
-
     if (servizio === 'gemini') {
       if (!GEMINI_API_KEY) {
         await segnaNelDiario('gemini', 'errore', 'prova', 'chiave non configurata');
@@ -5225,7 +5222,7 @@ function _fonteDaEtichette(etichette) {
 
 /* Il giro completo. Ogni passo lascia una riga nel diario: se il messaggio
    non parte lo si scopre da li', non dal cliente che non richiama. */
-async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
+async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, casellaGmail) {
   const impostazioni = await impostazioniLead();
 
   /* niente doppioni: la stessa mail puo' arrivare dalla notifica e dal
@@ -5247,7 +5244,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
   if (giudizio && giudizio.nonEunLead) {
     /* la segno letta (niente stellina): non e' una richiesta e non deve
        tornare sotto gli occhi del controllo ogni cinque minuti */
-    segnaMailLavorata(idGmail, false);
+    segnaMailLavorata(idGmail, false, casellaGmail);
     await segnaNelDiario('lead', 'scartato', 'mail scartata', giudizio.motivo, mittente || '');
     return { scartata: true, motivo: giudizio.motivo };
   }
@@ -5329,7 +5326,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
      diario (si vedono in Connessioni), ma in tabella non entrano piu'.
      Chi le rivuole accende "avvisaSenzaRecapito" nelle impostazioni lead. */
   if (senzaRecapito && !impostazioni.avvisaSenzaRecapito) {
-    segnaMailLavorata(idGmail, false);
+    segnaMailLavorata(idGmail, false, casellaGmail);
     await segnaNelDiario('lead', 'scartato', 'avviso del portale',
       'niente nome, numero o mail' + (codiceImmobile ? ' · ' + codiceImmobile : '') +
       (letto.messaggio ? ' · ' + String(letto.messaggio).slice(0, 60) : ''),
@@ -5353,7 +5350,7 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette) {
   });
 
   /* letta + stellina: in casella si vede subito che questa e' entrata */
-  segnaMailLavorata(idGmail, true);
+  segnaMailLavorata(idGmail, true, casellaGmail);
 
   await segnaNelDiario('lead', 'ok', 'lead creato',
     `${letto.nome} · ${letto.telefono || letto.mail}` +
@@ -5445,13 +5442,29 @@ app.post('/api/lead/in-arrivo', async (req, res) => {
 /* Il token di accesso dura un'ora: si rinnova da solo con quello lungo */
 let GMAIL_TOKEN = { valore: '', scade: 0 };
 
-async function tokenGmail() {
-  if (GMAIL_TOKEN.valore && Date.now() < GMAIL_TOKEN.scade - 60000) return GMAIL_TOKEN.valore;
+/* DUE CASELLE. Le richieste dei portali non arrivano tutte allo stesso
+   indirizzo: una parte su agenzia@, una parte su richieste.specifiche@.
+   Invece di scegliere, il CRM le legge tutte e due: la principale resta
+   GMAIL_REFRESH_TOKEN (ed e' anche quella che manda gli inviti del
+   calendario), la seconda si aggiunge con GMAIL_REFRESH_TOKEN_2 senza
+   toccare nulla di quello che gia' funziona. */
+const GMAIL_TOKEN_2 = { valore: '', scade: 0 };
+function caselleGmail() {
+  const elenco = [];
+  if (process.env.GMAIL_REFRESH_TOKEN) elenco.push('1');
+  if (process.env.GMAIL_REFRESH_TOKEN_2) elenco.push('2');
+  return elenco;
+}
+
+async function tokenGmail(quale) {
+  const seconda = String(quale || '1') === '2';
+  const cassetto = seconda ? GMAIL_TOKEN_2 : GMAIL_TOKEN;
+  if (cassetto.valore && Date.now() < cassetto.scade - 60000) return cassetto.valore;
 
   const id = process.env.GMAIL_CLIENT_ID;
   const segreto = process.env.GMAIL_CLIENT_SECRET;
-  const lungo = process.env.GMAIL_REFRESH_TOKEN;
-  if (!id || !segreto || !lungo) throw new Error('Gmail non configurato');
+  const lungo = seconda ? process.env.GMAIL_REFRESH_TOKEN_2 : process.env.GMAIL_REFRESH_TOKEN;
+  if (!id || !segreto || !lungo) throw new Error('Gmail non configurato' + (seconda ? ' (seconda casella)' : ''));
 
   const corpo = new URLSearchParams({
     client_id: id, client_secret: segreto,
@@ -5470,12 +5483,13 @@ async function tokenGmail() {
   const dati = JSON.parse(risposta);
   if (dati.error) throw new Error(dati.error_description || dati.error);
 
-  GMAIL_TOKEN = { valore: dati.access_token, scade: Date.now() + (dati.expires_in || 3600) * 1000 };
-  return GMAIL_TOKEN.valore;
+  cassetto.valore = dati.access_token;
+  cassetto.scade = Date.now() + (dati.expires_in || 3600) * 1000;
+  return cassetto.valore;
 }
 
-function chiediAGmail(percorso) {
-  return tokenGmail().then(token => new Promise((risolvi, rifiuta) => {
+function chiediAGmail(percorso, quale) {
+  return tokenGmail(quale).then(token => new Promise((risolvi, rifiuta) => {
     https.get({
       hostname: 'gmail.googleapis.com', path: percorso,
       headers: { Authorization: 'Bearer ' + token }
@@ -5499,13 +5513,13 @@ function chiediAGmail(percorso) {
    Serve il permesso di scrittura su Gmail (scope gmail.modify): se il
    collegamento ha solo la lettura, Google risponde "insufficient permission"
    e ce lo scrivo nel diario una volta, senza fermare niente. */
-function segnaMailLavorata(idGmail, conStellina) {
+function segnaMailLavorata(idGmail, conStellina, quale) {
   if (!idGmail) return Promise.resolve(false);
   const corpo = JSON.stringify({
     removeLabelIds: ['UNREAD'],
     addLabelIds: conStellina === false ? [] : ['STARRED']
   });
-  return tokenGmail().then(token => new Promise((risolvi) => {
+  return tokenGmail(quale).then(token => new Promise((risolvi) => {
     const r = https.request({
       hostname: 'gmail.googleapis.com',
       path: '/gmail/v1/users/me/messages/' + encodeURIComponent(idGmail) + '/modify',
@@ -5561,14 +5575,14 @@ function intestazione(mail, nome) {
 }
 
 /* Prende una mail e la manda al motore */
-async function lavoraMailDiGmail(id) {
-  const mail = await chiediAGmail(`/gmail/v1/users/me/messages/${id}?format=full`);
+async function lavoraMailDiGmail(id, quale) {
+  const mail = await chiediAGmail(`/gmail/v1/users/me/messages/${id}?format=full`, quale);
   const testo = corpoDellaMail(mail.payload);
   if (!testo) {
     await segnaNelDiario('gmail', 'scartato', 'mail vuota', 'nessun corpo leggibile', id);
     return { scartata: true };
   }
-  return lavoraMailLead(testo, intestazione(mail, 'From'), intestazione(mail, 'Subject'), id);
+  return lavoraMailLead(testo, intestazione(mail, 'From'), intestazione(mail, 'Subject'), id, null, quale);
 }
 
 /* Quali mail guardare: solo quelle non lette che sembrano dei portali.
@@ -5589,11 +5603,22 @@ function filtroLead() {
 
 /* Il controllo di riserva: guarda cosa e' arrivato e non e' stato lavorato */
 async function controlloDiRiserva() {
+  /* un giro per ogni casella collegata */
+  let totale = { guardate: 0, nuovi: 0 };
+  for (const quale of caselleGmail()) {
+    const esito = await unGiroDiControllo(quale).catch(() => ({ guardate: 0, nuovi: 0 }));
+    totale.guardate += (esito && esito.guardate) || 0;
+    totale.nuovi += (esito && esito.nuovi) || 0;
+  }
+  return totale;
+}
+
+async function unGiroDiControllo(quale) {
   try {
     const q = encodeURIComponent(filtroLead());
     /* con il filtro che guarda anche le mail gia' lette ne passano di piu':
        ne leggo 40 per giro, cosi' un arretrato si recupera in una volta */
-    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=40`);
+    const elenco = await chiediAGmail(`/gmail/v1/users/me/messages?q=${q}&maxResults=40`, quale);
     const mail = elenco.messages || [];
     if (!mail.length) return { guardate: 0 };
 
@@ -5601,7 +5626,7 @@ async function controlloDiRiserva() {
     for (const m of mail) {
       const gia = await Centralino.findOne({ idMailOrigine: m.id });
       if (gia) continue;
-      const esito = await lavoraMailDiGmail(m.id);
+      const esito = await lavoraMailDiGmail(m.id, quale);
       if (esito && esito.id) nuovi++;
     }
     if (nuovi) {
@@ -5741,12 +5766,17 @@ app.get('/api/lead/ultime-mail', async (req, res) => {
     if (req.query.tutte === '1') q = q.replace(/is:unread\s*/i, '');
     q += ' newer_than:' + giorni + 'd';
 
-    const elenco = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=' + quante);
-    const mail = elenco.messages || [];
-
     const fuori = [];
+    for (const quale of caselleGmail()) {
+      let indirizzo = '';
+      try { indirizzo = (await chiediAGmail('/gmail/v1/users/me/profile', quale)).emailAddress || ''; } catch (e) {}
+      let mail = [];
+      try {
+        const elenco = await chiediAGmail('/gmail/v1/users/me/messages?q=' + encodeURIComponent(q) + '&maxResults=' + quante, quale);
+        mail = elenco.messages || [];
+      } catch (e) { continue; }
     for (const m of mail) {
-      const dettaglio = await chiediAGmail('/gmail/v1/users/me/messages/' + m.id + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date');
+      const dettaglio = await chiediAGmail('/gmail/v1/users/me/messages/' + m.id + '?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date', quale);
       const da = intestazione(dettaglio, 'From');
       const oggetto = intestazione(dettaglio, 'Subject');
       const quando = new Date(parseInt(dettaglio.internalDate, 10) || Date.now()).toISOString();
@@ -5761,7 +5791,8 @@ app.get('/api/lead/ultime-mail', async (req, res) => {
           .sort({ quando: -1 }).catch(() => null);
         if (scarto) esito = 'scartata: ' + (scarto.dettaglio || '').slice(0, 120);
       }
-      fuori.push({ id: m.id, quando, da, oggetto, esito });
+      fuori.push({ id: m.id, casella: indirizzo, quando, da, oggetto, esito });
+    }
     }
     fuori.sort((a, b) => String(b.quando).localeCompare(String(a.quando)));
     res.status(200).json({ filtro: q, trovate: fuori.length, mail: fuori });
