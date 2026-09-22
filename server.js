@@ -4756,6 +4756,11 @@ const ImpostazioniLeadSchema = new mongoose.Schema({
   /* a chi assegnare quando non si capisce di chi e' l'immobile */
   consulenteRiserva: { type: String, default: '' },
 
+  /* Il collegamento della SECONDA casella di posta, tenuto qui invece che
+     nelle variabili di Render: si incolla una volta dal CRM e non dipende
+     piu' da salvataggi e riavvii del servizio. */
+  tokenCasella2: { type: String, default: '' },
+
   /* Gli avvisi dei portali del tipo "un utente ha chiamato" non portano ne'
      numero ne' mail: non c'e' niente da lavorare. Di norma la riga si salva
      nel Centralino ma il consulente NON viene avvisato su Telegram. Questo
@@ -4773,11 +4778,124 @@ const ImpostazioniLead = mongoose.model('ImpostazioniLead', ImpostazioniLeadSche
 async function impostazioniLead() {
   let i = await ImpostazioniLead.findOne({ chiave: 'automazione-lead' });
   if (!i) i = await ImpostazioniLead.create({ chiave: 'automazione-lead' });
+  /* tengo a portata di mano il collegamento della seconda casella */
+  if (i && i.tokenCasella2) TOKEN_CASELLA_2_SALVATO = i.tokenCasella2;
   return i;
 }
 
+/* all'avvio: se il collegamento della seconda casella e' nel database, lo
+   carico subito, cosi' il primo controllo della posta lo trova gia' pronto */
+setTimeout(() => { impostazioniLead().catch(() => {}); }, 4000);
+
+/* IL COLLEGAMENTO DELLA SECONDA CASELLA si incolla qui, una volta sola.
+   Il token si salva nel database e NON viene mai restituito da nessuna
+   lettura: in risposta torna solo l'indirizzo della casella collegata. */
+/* chi puo' collegare una casella: solo il Broker (o l'amministratore) */
+async function eUnCapo(utente, pass) {
+  const u = String(utente || '').trim();
+  if (u.toLowerCase() === 'admin' && pass === 'Forte2026') return true;
+  const c = await Consulente.findOne({ utente: u }).catch(() => null);
+  if (!c || c.pass !== pass) return false;
+  const r = String(c.ruolo || '').toUpperCase();
+  return r === 'BROKER' || r === 'AMMINISTRATORE';
+}
+
+app.post('/api/lead/casella-2', async (req, res) => {
+  try {
+    const corpo = req.body || {};
+    if (!await eUnCapo(corpo.utente, corpo.pass)) {
+      return res.status(401).json({ error: 'Serve l\'accesso di un Broker' });
+    }
+    const token = String((req.body || {}).refreshToken || '').trim();
+    if (!token) return res.status(400).json({ error: 'Manca il collegamento (refresh token)' });
+    if (!/^1\/\//.test(token)) return res.status(400).json({ error: 'Non sembra un refresh token di Google (dovrebbe iniziare con 1//)' });
+
+    const i = await impostazioniLead();
+    i.tokenCasella2 = token;
+    await i.save();
+    TOKEN_CASELLA_2_SALVATO = token;
+    GMAIL_TOKEN_2.valore = ''; GMAIL_TOKEN_2.scade = 0;   // butto via il vecchio accesso
+
+    /* provo subito: se il collegamento e' buono dico quale casella apre */
+    try {
+      const profilo = await chiediAGmail('/gmail/v1/users/me/profile', '2');
+      await segnaNelDiario('gmail', 'ok', 'seconda casella collegata', profilo.emailAddress || '', '');
+      return res.status(200).json({ status: 'success', casella: profilo.emailAddress || '' });
+    } catch (e) {
+      return res.status(200).json({ status: 'success', casella: '', avviso: 'salvato, ma Google dice: ' + e.message });
+    }
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* per staccarla */
+app.delete('/api/lead/casella-2', async (req, res) => {
+  try {
+    if (!await eUnCapo(req.query.utente, req.query.pass)) {
+      return res.status(401).json({ error: 'Serve l\'accesso di un Broker' });
+    }
+    const i = await impostazioniLead();
+    i.tokenCasella2 = '';
+    await i.save();
+    TOKEN_CASELLA_2_SALVATO = '';
+    GMAIL_TOKEN_2.valore = ''; GMAIL_TOKEN_2.scade = 0;
+    res.status(200).json({ status: 'success' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* PAGINA "COLLEGA LA SECONDA CASELLA": si apre su /collega-casella, si
+   incolla il collegamento copiato da OAuth Playground e si salva. Niente
+   variabili su Render, niente riavvii. */
+const COLLEGA_CASELLA_HTML = `<!doctype html><html lang="it"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Collega casella — Forte</title>
+<style>
+ body{margin:0;background:#0b0d10;color:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;justify-content:center;padding:34px 16px;}
+ .b{width:100%;max-width:470px;background:#14171c;border:1px solid rgba(255,255,255,.08);border-radius:16px;padding:24px;}
+ h1{font-family:ui-serif,Georgia,serif;font-size:23px;margin:0 0 4px;} h1 span{color:#c9a86a;}
+ p.s{color:#9aa2ad;font-size:13.5px;margin:0 0 18px;line-height:1.5;}
+ label{display:block;font-size:12.5px;color:#9aa2ad;margin:12px 0 5px;}
+ input,textarea{width:100%;background:#111418;border:1px solid rgba(255,255,255,.14);color:#f0f2f5;border-radius:9px;padding:11px 12px;font-size:15px;box-sizing:border-box;}
+ textarea{min-height:82px;resize:vertical;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;}
+ button{width:100%;margin-top:16px;background:linear-gradient(180deg,#e3ca94,#c9a86a);color:#231a08;border:0;border-radius:9px;padding:13px;font-size:15.5px;font-weight:700;cursor:pointer;}
+ .e{margin-top:14px;font-size:13.5px;line-height:1.5;padding:11px 13px;border-radius:9px;display:none;}
+ .ok{background:rgba(0,200,117,.12);border:1px solid rgba(0,200,117,.4);color:#57c98b;}
+ .ko{background:rgba(244,63,94,.12);border:1px solid rgba(244,63,94,.4);color:#f0616f;}
+</style></head><body><div class="b">
+ <h1>Collega la seconda <span>casella</span></h1>
+ <p class="s">Incolla qui il collegamento (refresh token) copiato da OAuth Playground per la casella delle richieste. Resta nel CRM: non serve toccare Render.</p>
+ <label>Utente CRM (Broker)</label><input id="u" autocapitalize="none">
+ <label>Password</label><input id="p" type="password">
+ <label>Collegamento (inizia con 1//)</label><textarea id="t" placeholder="1//04..."></textarea>
+ <button id="b">Collega la casella</button>
+ <div class="e" id="e"></div>
+</div><script>
+var b=document.getElementById('b'),e=document.getElementById('e');
+b.onclick=function(){
+  e.style.display='none'; b.disabled=true; b.textContent='Collego…';
+  fetch('/api/lead/casella-2',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({utente:document.getElementById('u').value.trim(),pass:document.getElementById('p').value,refreshToken:document.getElementById('t').value.trim()})})
+  .then(function(r){return r.json().then(function(j){return {ok:r.ok,j:j};});})
+  .then(function(x){
+    b.disabled=false; b.textContent='Collega la casella'; e.style.display='block';
+    if(!x.ok){ e.className='e ko'; e.textContent=x.j.error||'non riuscito'; return; }
+    e.className='e ok';
+    e.textContent=x.j.casella ? ('Collegata: '+x.j.casella) : ('Salvato. '+(x.j.avviso||''));
+  })
+  .catch(function(err){ b.disabled=false; b.textContent='Collega la casella'; e.style.display='block'; e.className='e ko'; e.textContent=err.message; });
+};
+</script></body></html>`;
+app.get(['/collega-casella', '/collega-casella/'], (req, res) => {
+  res.set('Content-Type', 'text/html; charset=utf-8');
+  res.send(COLLEGA_CASELLA_HTML);
+});
+
 app.get('/api/lead/impostazioni', async (req, res) => {
-  try { res.status(200).json(await impostazioniLead()); }
+  try {
+    const i = await impostazioniLead();
+    const fuori = i.toObject ? i.toObject() : i;
+    /* il collegamento della seconda casella non si mostra mai */
+    if (fuori.tokenCasella2) fuori.tokenCasella2 = '(collegata)';
+    res.status(200).json(fuori);
+  }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -5456,10 +5574,13 @@ const GMAIL_TOKEN_2 = { valore: '', scade: 0 };
 
 /* Il token della seconda casella: accetto i nomi piu' probabili, cosi' un
    trattino basso di troppo o di meno non fa perdere mezz'ora. */
+let TOKEN_CASELLA_2_SALVATO = '';   // copia in memoria di quello nel database
+
 function tokenSecondaCasella() {
   const e = process.env;
   return e.GMAIL_REFRESH_TOKEN_2 || e.GMAIL_REFRESH_TOKEN2 || e.GMAIL_REFRESH_TOKEN_B ||
-         e.GMAIL_REFRESH_TOKEN_SECONDA || e.GMAIL_REFRESH_TOKEN_RICHIESTE || '';
+         e.GMAIL_REFRESH_TOKEN_SECONDA || e.GMAIL_REFRESH_TOKEN_RICHIESTE ||
+         TOKEN_CASELLA_2_SALVATO || '';
 }
 
 function caselleGmail() {
