@@ -1478,11 +1478,24 @@ app.get('/api/stradario', async (req, res) => {
 
 app.put('/api/stradario/:comuneId', async (req, res) => {
   try {
-    const updateFields = { vie: req.body.vie };
-    if (req.body.abitanti) updateFields.abitanti = req.body.abitanti;
-    if (req.body.subalterniTotali) updateFields.subalterniTotali = Number(req.body.subalterniTotali);
+    /* Prima passavano solo vie, abitanti e subalterni: tutto il resto veniva
+       buttato via in silenzio (e i totali del comune non si salvavano mai).
+       Ora si aggiorna quello che arriva e basta: se "vie" non c'e', le vie
+       restano quelle, cosi' un salvataggio dei soli numeri non tocca lo
+       stradario. */
+    const b = req.body || {};
+    const updateFields = {};
+    if (b.vie !== undefined) updateFields.vie = b.vie;
+    ['abitanti', 'censitoDa', 'ultimoCensimento', 'provincia', 'quotazioneMedia', 'fonteDati']
+      .forEach(c => { if (b[c] !== undefined) updateFields[c] = b[c]; });
+    ['subalterniTotali', 'edificiTotali', 'abitazioniTotali', 'utenzeTari']
+      .forEach(c => { if (b[c] !== undefined) updateFields[c] = Number(b[c]) || 0; });
 
+    if (!Object.keys(updateFields).length) {
+      return res.status(400).json({ error: 'Niente da aggiornare' });
+    }
     const aggiornato = await Stradario.findByIdAndUpdate(req.params.comuneId, { $set: updateFields }, { new: true });
+    if (!aggiornato) return res.status(404).json({ error: 'Comune non trovato' });
     res.status(200).json({ status: 'success', data: aggiornato });
   } catch (err) { res.status(400).json({ error: err.message }); }
 });
