@@ -1732,8 +1732,13 @@ app.post('/api/todo/sincronizza', async (req, res) => {
       const gia = perOrigine[a.origine];
       if (gia) {
         /* Se il consulente l'ha gia' spuntata non la resuscito: una lista di controllo
-           spuntata deve restare spuntata, altrimenti riappare all'infinito. */
-        if (gia.stato === 'Completato') continue;
+           spuntata deve restare spuntata, altrimenti riappare all'infinito.
+           Fanno eccezione gli impegni dei 121: li' comanda la spunta nel 121, e se
+           l'impegno risulta di nuovo da fare l'attivita' deve tornare attiva. */
+        if (gia.stato === 'Completato') {
+          if (!/^121:/.test(String(gia.origine || ''))) continue;
+          gia.stato = 'Attivo';
+        }
         gia.task = a.task;
         /* la data spostata a mano vince su quella calcolata dalla scheda */
         if (!gia.scadenzaManuale) { gia.data = a.data; gia.scadenza = a.scadenza || ''; }
