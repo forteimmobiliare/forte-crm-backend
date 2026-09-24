@@ -419,9 +419,28 @@ CentralinoSchema.pre('save', function (next) {
   next();
 });
 
-/* Per ora l'invio non parte alla creazione: lo comanda chi mette la colonna
-   "Tg Cons Inviato" su Inviato, come faceva lo scenario su Make. Cosi' si
-   sceglie riga per riga finche' non ci si fida dell'automatismo. */
+/* ANCHE LE RICHIESTE SCRITTE A MANO AVVISANO IL CONSULENTE.
+   Prima l'avviso partiva solo dalle mail: una chiamata registrata al volo dal
+   Registro Chiamate o dal modulo del telefono restava lì, e nessuno la
+   prendeva in carico (e' successo con Fortino Maria Grazia, ferma un giorno
+   intero). Ora parte da sola, ma solo se la richiesta e' COMPLETA — recapito,
+   immobile e consulente — che e' la stessa regola delle mail: se manca
+   qualcosa la riga resta "⏸ Da completare" e non sveglia nessuno a vuoto. */
+CentralinoSchema.post('save', function (doc) {
+  if (!doc || !doc.eraNuova) return;
+  if (doc.tgInviatoIl || /invia|inviato/i.test(String(doc.tgConsInviato || ''))) return;
+  setImmediate(async () => {
+    try {
+      const impostazioni = await impostazioniLead();
+      if (!impostazioni || !impostazioni.attiva) return;
+      const scenTg = await Scenario.findOne({ azione: 'telegram-consulente' }).catch(() => null);
+      if (scenTg && !scenTg.attivo) return;
+      const riga = await Centralino.findById(doc._id);
+      if (!riga || riga.tgInviatoIl) return;
+      await mandaAvvisoTelegram(riga);     // la guardia "solo se completa" e' dentro
+    } catch (e) { console.error('Avviso sulla richiesta scritta a mano:', e.message); }
+  });
+});
 
 const Centralino = mongoose.model('Centralino', CentralinoSchema);
 
@@ -1729,6 +1748,34 @@ app.post('/api/centralino', async (req, res) => {
     delete b.rifImmobile; delete b.immobile; delete b.indirizzo; delete b.immobileId;
 
     await agganciaImmobileCentralino(b);
+
+    /* NIENTE DOPPIONI NEMMENO A MANO. Il controllo c'era solo sulle mail:
+       cosi' la stessa richiesta inserita due volte dal Registro Chiamate o dal
+       modulo del telefono creava due righe (e' successo con Fortino Maria
+       Grazia e con Veronica, inserita a mano sei minuti dopo che era gia'
+       arrivata da sola). Stessa persona, stesso immobile, entro tre giorni:
+       aggiorno quella che c'e' invece di farne un'altra. */
+    const tel = String(b.telefonoCliente || '').replace(/\D/g, '').slice(-9);
+    const mail = String(b.emailCliente || '').trim();
+    if (tel.length >= 6 || mail) {
+      const oppure = [];
+      if (tel.length >= 6) oppure.push({ telefonoCliente: new RegExp(tel.split('').join('[\\s.\\-]*') + '$') });
+      if (mail) oppure.push({ emailCliente: new RegExp('^' + mail.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') });
+      const gemella = await Centralino.findOne({
+        $or: oppure,
+        riferimentoImmobile: String(b.riferimentoImmobile || ''),
+        createdAt: { $gte: new Date(Date.now() - 3 * 24 * 60 * 60 * 1000) }
+      }).catch(() => null);
+      if (gemella) {
+        /* completo quello che manca: chi reinserisce spesso aggiunge un dato */
+        ['nome', 'emailCliente', 'telefonoCliente', 'messaggioCliente', 'consulente', 'incaricoCollegatoId', 'indirizzoImmobile']
+          .forEach(c => { if (b[c] && !String(gemella[c] || '').trim()) gemella[c] = b[c]; });
+        await gemella.save().catch(() => {});
+        await segnaNelDiario('centralino', 'saltato', 'richiesta doppia',
+          (b.nome || '') + ' su ' + (b.riferimentoImmobile || 'nessun immobile') + ' era già in tabella', '');
+        return res.status(200).json({ status: 'success', data: gemella, duplicato: true });
+      }
+    }
 
     const nuovo = new Centralino(b);
     res.status(201).json(await nuovo.save());
