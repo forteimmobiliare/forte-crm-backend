@@ -5440,7 +5440,7 @@ async function aChiVa(riferimento, impostazioni, testoCompleto) {
       if (m && testo.indexOf(m[1]) !== -1) return _destinazioneIncarico(inc, impostazioni);
     }
     // 3b) indirizzo: la via (parole significative) è nel testo; bonus se c'è anche il civico e/o il comune
-    let migliore = null, punteggio = 0;
+    let migliore = null, punteggio = 0, pari = [];
     for (const inc of incarichi) {
       const com = norm(inc.comune);
       // Se la via strutturata manca, ricavo le parole dell'indirizzo dal nome/posizione:
@@ -5454,9 +5454,34 @@ async function aChiVa(riferimento, impostazioni, testoCompleto) {
       if (!viaPresente) continue;
       let score = paroleVia.length;              // più parole della via combaciano, meglio è
       const civ = norm(inc.civico);
-      if (civ && civ !== 'n d' && new RegExp('(^| )' + civ + '( |$)').test(testoN)) score += 3;
-      if (com && testoN.indexOf(' ' + com + ' ') !== -1) score += 2;
-      if (score > punteggio) { punteggio = score; migliore = inc; }
+      const civicoTorna = !!(civ && civ !== 'n d' && new RegExp('(^| )' + civ + '( |$)').test(testoN));
+      const comuneTorna = !!(com && testoN.indexOf(' ' + com + ' ') !== -1);
+      if (civicoTorna) score += 3;
+      if (comuneTorna) score += 2;
+
+      /* UNA VIA SOLA NON BASTA. "Via Milano" combaciava con qualsiasi mail che
+         nominasse Milano — ed e' cosi' che una richiesta per Legnano via XX
+         Settembre e' finita su un immobile di Trecate. Perche' l'indirizzo
+         valga serve almeno una conferma: il comune, il civico, oppure una via
+         fatta di piu' parole (tipo "cesare battisti"), che da sola e' gia' un
+         segnale forte. */
+      const abbastanza = comuneTorna || civicoTorna || paroleVia.length >= 2;
+      if (!abbastanza) continue;
+
+      if (score > punteggio) { punteggio = score; migliore = inc; pari = [inc]; }
+      else if (score === punteggio && score > 0) { pari.push(inc); }
+    }
+
+    /* DUE IMMOBILI SULLA STESSA VIA. A Vizzola Ticino, in Via Don Zosi, ce ne
+       sono due di due consulenti diversi: senza civico o codice IF nel testo
+       non c'e' modo di sapere quale sia, e tirare a indovinare vuol dire
+       avvisare il consulente sbagliato. Meglio lasciarla da smistare. */
+    if (pari.length > 1) {
+      return {
+        consulente: impostazioni.consulenteRiserva || '',
+        incaricoId: '', immobile: '', codice: '', riconosciuto: false,
+        ambiguo: pari.map(x => x.idElemento).filter(Boolean).join(', ')
+      };
     }
     if (migliore) return _destinazioneIncarico(migliore, impostazioni);
   }
@@ -5556,6 +5581,13 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
   letto = sistemaContatti(letto);
 
   const destinazione = await aChiVa(letto.riferimento, impostazioni, testo);
+  /* se l'indirizzo bastava per due immobili diversi lo scrivo nel diario:
+     serve a capire perche' la richiesta e' arrivata senza immobile */
+  if (destinazione && destinazione.ambiguo) {
+    await segnaNelDiario('lead', 'scartato', 'immobile non deciso',
+      'l\'indirizzo combacia con ' + destinazione.ambiguo + ': serve il codice IF o il civico',
+      letto.nomePortale || mittente || '');
+  }
 
   /* Fonte: prima le etichette Gmail (le metti tu per portale), poi il modulo del
      sito (Formspree), poi il portale riconosciuto dal testo. */
