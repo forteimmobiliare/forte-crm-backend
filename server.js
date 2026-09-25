@@ -4319,6 +4319,10 @@ async function sollecitoVisione(v) {
    da sola nella scheda Visioni, senza doverla ricopiare.
 --------------------------------------------------------------------------- */
 const PAGINA_FEEDBACK_VISITA = 'https://www.immobiliareforte.com/feedback-visita';
+/* Le due pagine del sito che servono dopo una visita: chi compra vuole capire
+   come si fa, e quasi sempre ha anche una casa da vendere. */
+const SITO_COMPRARE = 'https://www.immobiliareforte.com/comprare-casa';
+const SITO_VENDERE = 'https://www.immobiliareforte.com/vendere-casa';
 
 function messaggioFeedbackVisita(v, inc, nomeConsulente) {
   const chi = String(nomeConsulente || '').trim() || 'un consulente';
@@ -4335,6 +4339,20 @@ function messaggioFeedbackVisita(v, inc, nomeConsulente) {
   righe.push('');
   righe.push('Anche un parere negativo mi \u00e8 utile: serve a me per proporle cose pi\u00f9 giuste, ' +
     'e al proprietario per capire come si muove il mercato.');
+
+  /* I documenti dell'immobile, se il consulente li ha caricati sull'incarico:
+     chi ha appena visto casa vuole vedere le carte, ed e' il momento giusto. */
+  const doc = inc ? String(inc.linkDocumenti || '').trim() : '';
+  if (doc) {
+    righe.push('');
+    righe.push('Qui trova i documenti dell\'immobile:');
+    righe.push(doc);
+  }
+
+  righe.push('');
+  righe.push('Due cose che le lascio comunque:');
+  righe.push('\u2022 se vuole capire come funziona comprare casa passo per passo: ' + SITO_COMPRARE);
+  righe.push('\u2022 se ha un immobile da vendere, da qui pu\u00f2 chiedere una valutazione: ' + SITO_VENDERE);
   righe.push('');
   righe.push('A presto,');
   righe.push(chi + ' \u00b7 Forte Immobiliare');
