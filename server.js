@@ -4350,9 +4350,17 @@ function messaggioFeedbackVisita(v, inc, nomeConsulente) {
   }
 
   righe.push('');
-  righe.push('Due cose che le lascio comunque:');
-  righe.push('\u2022 se vuole capire come funziona comprare casa passo per passo: ' + SITO_COMPRARE);
-  righe.push('\u2022 se ha un immobile da vendere, da qui pu\u00f2 chiedere una valutazione: ' + SITO_VENDERE);
+  righe.push('Le lascio anche due cose che possono tornarle utili.');
+  righe.push('');
+  righe.push('\uD83C\uDFE0 *Se sta valutando l\'acquisto*, qui \u00e8 spiegato passo per passo come funziona davvero: ' +
+    'cosa controllare prima di fare una proposta, quali spese ci sono oltre al prezzo, e cosa succede dal compromesso al rogito. ' +
+    'Dieci minuti di lettura che fanno evitare gli errori pi\u00f9 cari.');
+  righe.push(SITO_COMPRARE);
+  righe.push('');
+  righe.push('\uD83D\uDCB6 *Se prima deve vendere casa sua*, da questo link parte subito la valutazione: ' +
+    'inserisce i dati del suo immobile e riceve la stima, gratis e senza impegno. ' +
+    'Le serve per sapere con che budget pu\u00f2 muoversi davvero, prima di innamorarsi di una casa.');
+  righe.push(SITO_VENDERE);
   righe.push('');
   righe.push('A presto,');
   righe.push(chi + ' \u00b7 Forte Immobiliare');
