@@ -3790,6 +3790,20 @@ const PrenotazioneOpenHouseSchema = new mongoose.Schema({
 }, { timestamps: true });
 const PrenotazioneOpenHouse = mongoose.model('PrenotazioneOpenHouse', PrenotazioneOpenHouseSchema);
 registraRotteScheda('open-house', OpenHouse, 'Open House');
+
+/* ==========================================================================
+   PROCESSI DI PRODUZIONE (Diagrammi): modificabili dal CRM.
+   Ogni processo ha dei passi; da un processo si generano attività in To Do.
+========================================================================== */
+const ProcessoSchema = new mongoose.Schema({
+  nome: { type: String, default: '' },
+  sotto: { type: String, default: '' },
+  colore: { type: String, default: '#C6A777' },
+  ordine: { type: Number, default: 0 },
+  passi: { type: [{ nome: String, nota: String, icona: String, vai: String }], default: [] }
+}, { timestamps: true });
+const Processo = mongoose.model('Processo', ProcessoSchema);
+registraRotteScheda('processi', Processo, 'Processo');
 /* Un consulente (che segue l'organizzatore) conferma/ritira la presenza a un
    Open House: entra tra i partecipanti e da lì vede gli slot anche lui. */
 app.post('/api/open-house/:id/partecipa', async (req, res) => {
