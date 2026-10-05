@@ -10171,7 +10171,6 @@ const costruisciHtmlIncarico = (function () {
     const firmaValore = (etichetta) => {
       const f = r.firma || {};
       const lab = String(etichetta).toLowerCase();
-      if (f.stato === 'firmato' && lab.indexOf('venditr') !== -1) return 'Firmato digitalmente (OTP) \u2014 ' + (f.nome || '') + (f.codiceFiscale ? ' \u00b7 CF ' + f.codiceFiscale : '') + (f.firmatoIl ? ' \u00b7 ' + new Date(f.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' }) : '');
       if (f.agente && f.agente.nome && lab.indexOf('agente') !== -1) return 'Firmato digitalmente \u2014 ' + f.agente.nome + (f.agente.cf ? ' \u00b7 CF ' + f.agente.cf : '') + (f.agente.firmatoIl ? ' \u00b7 ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' }) : '');
       return '';
     };
@@ -10447,6 +10446,14 @@ const costruisciHtmlIncarico = (function () {
       @media print{ body{background:#fff} .toolbar{display:none} .pagina{margin:0;box-shadow:none;page-break-after:always;min-height:296mm} .pagina:last-child{page-break-after:auto} }
       @page{size:A4;margin:0}
     `;
+    const _fI = r.firma || {};
+    const boxVendCorner = (_fI.stato === 'firmato')
+      ? '<div style="position:absolute; left:14mm; bottom:26mm; width:90mm; border:1.4px solid #12803a; background:#eafaef; border-radius:8px; padding:8px 11px; font-family:Verdana,Arial,sans-serif; color:#0d5e2b;">'
+        + '<div style="font-size:10px; font-weight:800;">FIRMA VENDITORE (OTP)</div>'
+        + '<div style="font-size:9px; margin-top:2px;">' + propEsc(_fI.nome || '') + (_fI.codiceFiscale ? ' &middot; CF ' + propEsc(_fI.codiceFiscale) : '') + '</div>'
+        + (_fI.firmatoIl ? '<div style="font-size:8.5px;">' + propEsc(new Date(_fI.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) + (_fI.telefono ? ' &middot; Tel ' + propEsc(_fI.telefono) : '') + '</div>' : '')
+        + '</div>'
+      : '';
 
     return `<!DOCTYPE html>
 <html lang="it"><head><meta charset="utf-8">
@@ -10454,7 +10461,7 @@ const costruisciHtmlIncarico = (function () {
 <style>${css}</style></head>
 <body>
 <div class="toolbar"><button onclick="window.print()">Stampa / Salva PDF</button></div>
-${copertina}${pagina(sec2 + sec3)}${pag4}${pagina(sec5 + sec6)}${pagina(sec7 + sec8)}${pagina(sec9 + sec10)}${pagina(sec11 + sec12)}
+${copertina}${pagina(sec2 + sec3)}${pag4}${pagina(sec5 + sec6)}${pagina(sec7 + sec8)}${pagina(sec9 + sec10)}${pagina(sec11 + sec12 + boxVendCorner)}
 </body></html>`;
   
   };
@@ -10475,7 +10482,7 @@ app.get('/api/pubblico/incarico/:id/documento', async (req, res) => {
     }
     res.set('Content-Type', 'text/html; charset=utf-8');
     res.set('Cache-Control', 'no-store');
-    res.send(_timbroFirma(costruisciHtmlIncarico(inc, agente), inc.firma));
+    res.send(costruisciHtmlIncarico(inc, agente));
   } catch (err) { res.status(500).send('<p style="font-family:sans-serif;padding:24px">Errore: ' + err.message + '</p>'); }
 });
 
