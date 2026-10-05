@@ -9630,8 +9630,20 @@ const costruisciHtmlPropostaDoc = (function () {
 
     function box(v) { return `<div class="box">${propEsc(v)}</div>`; }
     function check(testo, attivo) { return `<div class="check${attivo ? ' check-on' : ''}"><span class="quadro">${attivo ? '☑' : '□'}</span> ${testo}</div>`; }
+    function firmaValore(etichetta) {
+      const f = d.firma || {};
+      const lab = String(etichetta).toLowerCase();
+      if (lab.indexOf('promissario') !== -1 || lab.indexOf('promittente') !== -1 || lab.indexOf('venditr') !== -1) return '';
+      if (f.stato === 'firmato' && (lab.indexOf('acquirente') !== -1 || lab.indexOf('proponente') !== -1)) return 'Firmato digitalmente (OTP) \u2014 ' + (f.nome || '') + (f.codiceFiscale ? ' \u00b7 CF ' + f.codiceFiscale : '') + (f.firmatoIl ? ' \u00b7 ' + new Date(f.firmatoIl).toLocaleString('it-IT') : '');
+      if (f.agente && f.agente.nome && lab.indexOf('agente') !== -1) return 'Firmato digitalmente \u2014 ' + f.agente.nome + (f.agente.cf ? ' \u00b7 CF ' + f.agente.cf : '') + (f.agente.firmatoIl ? ' \u00b7 ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT') : '');
+      return '';
+    }
     function firmaRiga(etichetta, evidenzia) {
-      return `<div class="firma"><div class="firma-lab${evidenzia ? ' evid-giallo' : ''}">${etichetta}</div><div class="firma-punti">………………………………………………………………………………………………………</div></div>`;
+      const _v = firmaValore(etichetta);
+      const _p = _v
+        ? '<div class="firma-punti" style="color:#0d5e2b;font-weight:700;border-bottom:1px solid #12803a;padding-bottom:2px;">\u2714 ' + propEsc(_v) + '</div>'
+        : '<div class="firma-punti">………………………………………………………………………………………………………</div>';
+      return `<div class="firma"><div class="firma-lab${evidenzia ? ' evid-giallo' : ''}">${etichetta}</div>${_p}</div>`;
     }
 
     const privacy = `<p class="privacy">PRIVACY: Il PROPONENTE prende atto di aver ricevuto la scheda informativa ai sensi della normativa vigente sulla “Tutela di dati personali”.<br>
@@ -9887,9 +9899,9 @@ const costruisciHtmlPropostaDoc = (function () {
 
     const pag15 = pagina(`
       <div class="spazio-firme"></div>
-      <div class="firma"><div class="firma-lab">L’Agente Immobiliare</div><div class="firma-punti">…………………………………………………………………………………………………………………..…</div></div>
-      <div class="firma"><div class="firma-lab">Parte Venditrice</div><div class="firma-punti">…………………………………………………………………………………………………………………..…</div></div>
-      <div class="firma"><div class="firma-lab">Parte Acquirente</div><div class="firma-punti">…………………………………………………………………………………………………………………..…</div></div>
+      ${firmaRiga('L’Agente Immobiliare')}
+      ${firmaRiga('Parte Venditrice')}
+      ${firmaRiga('Parte Acquirente', true)}
     `);
 
     const pag16 = paginaCompensoTabelle('COMPENSO DI MEDIAZIONE PARTE  VENDITRICE', d.venditori);
@@ -10047,7 +10059,8 @@ ${copertina}${pag2}${pag3}${pag4}${pag5}${pag6}${pag7}${pag8}${pag9}${pag10}${pa
       scadenzaProposta: p.dataScadenza || '', dataPresa: p.dataPresaProposta || '',
       clausole: String(p.noteVarie || '').split('\n').map(s => s.trim()).filter(Boolean),
       provvigioneAcquirente: numeroDaCampo(p.provvigioneAcquirente) || 0, provvigioneVenditrice: provvigioneVenditrice,
-      luogo: AGENZIA_FORTE.citta
+      luogo: AGENZIA_FORTE.citta,
+      firma: p.firma || null
     };
   }
 
@@ -10153,7 +10166,20 @@ const costruisciHtmlIncarico = (function () {
     const pagina = (contenuto) => `<section class="pagina">${testata}<div class="contenuto">${contenuto}</div>${pie}</section>`;
     const box = (v) => `<div class="box">${propEsc(v || '')}</div>`;
     const check = (testo, attivo) => `<div class="check${attivo ? ' check-on' : ''}"><span class="quadro">${attivo ? '☑' : '☐'}</span> ${testo}</div>`;
-    const firmaRiga = (etichetta, evid) => `<div class="firma"><div class="firma-lab${evid ? ' evid-giallo' : ''}">${etichetta}</div><div class="firma-punti">………………………………………………………………………</div></div>`;
+    const firmaValore = (etichetta) => {
+      const f = r.firma || {};
+      const lab = String(etichetta).toLowerCase();
+      if (f.stato === 'firmato' && lab.indexOf('venditr') !== -1) return 'Firmato digitalmente (OTP) \u2014 ' + (f.nome || '') + (f.codiceFiscale ? ' \u00b7 CF ' + f.codiceFiscale : '') + (f.firmatoIl ? ' \u00b7 ' + new Date(f.firmatoIl).toLocaleString('it-IT') : '');
+      if (f.agente && f.agente.nome && lab.indexOf('agente') !== -1) return 'Firmato digitalmente \u2014 ' + f.agente.nome + (f.agente.cf ? ' \u00b7 CF ' + f.agente.cf : '') + (f.agente.firmatoIl ? ' \u00b7 ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT') : '');
+      return '';
+    };
+    const firmaRiga = (etichetta, evid) => {
+      const _v = firmaValore(etichetta);
+      const _p = _v
+        ? '<div class="firma-punti" style="color:#0d5e2b;font-weight:700;border-bottom:1px solid #12803a;padding-bottom:2px;">\u2714 ' + propEsc(_v) + '</div>'
+        : '<div class="firma-punti">………………………………………………………………………</div>';
+      return `<div class="firma"><div class="firma-lab${evid ? ' evid-giallo' : ''}">${etichetta}</div>${_p}</div>`;
+    };
     const tabellaNominativi = (elenco, righeMin) => {
       let righe = '';
       for (let n = 0; n < Math.max(righeMin, elenco.length); n++) {
