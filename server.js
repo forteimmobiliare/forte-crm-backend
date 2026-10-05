@@ -2,6 +2,7 @@ const express = require('express');
 const https = require('https');
 const mongoose = require('mongoose');
 let _PDFLIB = null; try { _PDFLIB = require('pdf-lib'); } catch (e) { _PDFLIB = null; }  // per scrivere la firma dentro i PDF caricati
+let _PDFJS = null; try { _PDFJS = require('pdfjs-dist/legacy/build/pdf.js'); } catch (e) { try { _PDFJS = require('pdfjs-dist'); } catch (e2) { _PDFJS = null; } }  // per trovare la riga firma nei PDF caricati
 const cors = require('cors');
 const app = express();
 
@@ -10571,22 +10572,74 @@ function _timbroFirma(html, f) {
 /* Serve il file caricato dall'agente (PDF/immagine) al posto del documento
    generato: durante la lettura/firma lo manda cosi' com'e'; a firma avvenuta
    restituisce un certificato di firma (timbro + traccia) col file incorporato. */
+async function _posizioniFirma(bytes) {
+  if (!_PDFJS || !_PDFJS.getDocument) return null;
+  const task = _PDFJS.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, disableFontFace: true });
+  const doc = await task.promise;
+  const out = { acquirente: [], agente: [] };
+  for (let pi = 1; pi <= doc.numPages; pi++) {
+    const page = await doc.getPage(pi);
+    let tc; try { tc = await page.getTextContent(); } catch (e) { continue; }
+    (tc.items || []).forEach(function (it) {
+      const raw = (it.str || '').trim();
+      if (!raw || raw.length > 44) return;
+      const str = raw.toLowerCase();
+      const x = it.transform[4], y = it.transform[5];
+      if (/venditr|promittente|promissario/.test(str)) return;
+      if (/proponente|acquirente/.test(str) || /\bfirma\b/.test(str)) out.acquirente.push({ page: pi, x: x, y: y });
+      if (/agente immobiliare|l.agente/.test(str) || /agenzia/.test(str)) out.agente.push({ page: pi, x: x, y: y });
+    });
+  }
+  try { await doc.destroy(); } catch (e) {}
+  return out;
+}
 async function _pdfFirmato(doc, tipoMime, bytes) {
   if (!_PDFLIB) return null;
   const { PDFDocument, StandardFonts, rgb } = _PDFLIB;
-  let pdf;
-  if (tipoMime.indexOf('pdf') !== -1) {
-    pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  } else {
-    pdf = await PDFDocument.create();
-    const img = (tipoMime.indexOf('png') !== -1) ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
-    const pg = pdf.addPage([img.width, img.height]);
+  const f = doc.firma || {};
+  const verde = rgb(0.05, 0.33, 0.17);
+  const txtAcq = 'Firmato (OTP): ' + (f.nome || '') + (f.codiceFiscale ? ' - CF ' + f.codiceFiscale : '') + (f.firmatoIl ? ' - ' + new Date(f.firmatoIl).toLocaleDateString('it-IT') : '');
+  const txtAg = (f.agente && f.agente.nome) ? ('Firmato: ' + f.agente.nome + (f.agente.cf ? ' - CF ' + f.agente.cf : '')) : '';
+
+  // Immagini: niente ricerca testo -> PDF con immagine + pagina firma
+  if (tipoMime.indexOf('pdf') === -1) {
+    const pdfI = await PDFDocument.create();
+    const img = (tipoMime.indexOf('png') !== -1) ? await pdfI.embedPng(bytes) : await pdfI.embedJpg(bytes);
+    const pg = pdfI.addPage([img.width, img.height]);
     pg.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+    await _aggiungiPaginaFirma(pdfI, f);
+    return Buffer.from(await pdfI.save());
   }
+
+  const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  const font = await pdf.embedFont(StandardFonts.HelveticaBold);
+  let pos = null;
+  try { pos = await _posizioniFirma(bytes); } catch (e) { pos = null; }
+  const pages = pdf.getPages();
+  let messe = 0;
+  const disegna = (lista, testo) => {
+    if (!testo || !lista || !lista.length) return;
+    // una firma per pagina (evito doppioni sulla stessa riga): tengo l'ultima occorrenza per pagina
+    const perPagina = {};
+    lista.forEach(function (m) { perPagina[m.page] = m; });
+    Object.keys(perPagina).forEach(function (k) {
+      const m = perPagina[k]; const pg = pages[m.page - 1]; if (!pg) return;
+      let yy = m.y - 11; if (yy < 6) yy = m.y + 6;
+      try { pg.drawText(testo, { x: Math.max(6, m.x), y: yy, size: 8, font: font, color: verde }); messe++; } catch (e) {}
+    });
+  };
+  disegna(pos && pos.acquirente, txtAcq);
+  disegna(pos && pos.agente, txtAg);
+
+  // Se non ho trovato nessuna riga adatta, aggiungo comunque una pagina di firma
+  if (!messe) await _aggiungiPaginaFirma(pdf, f);
+  return Buffer.from(await pdf.save());
+}
+async function _aggiungiPaginaFirma(pdf, f) {
+  const { StandardFonts, rgb } = _PDFLIB;
   const font = await pdf.embedFont(StandardFonts.Helvetica);
   const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
   const page = pdf.addPage([595.28, 841.89]);
-  const f = doc.firma || {};
   const verde = rgb(0.05, 0.33, 0.17);
   page.drawRectangle({ x: 38, y: 505, width: 519, height: 285, borderColor: rgb(0.07, 0.5, 0.23), borderWidth: 2, color: rgb(0.918, 0.98, 0.937) });
   let y = 760;
@@ -10606,8 +10659,6 @@ async function _pdfFirmato(doc, tipoMime, bytes) {
     L('Agente: ' + f.agente.nome + (f.agente.cf ? ' - CF ' + f.agente.cf : ''), false, 11);
     if (f.agente.firmatoIl) L('Data e ora: ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT'), false, 9.5);
   }
-  const out = await pdf.save();
-  return Buffer.from(out);
 }
 async function _inviaFileCaricato(doc, req, res) {
   const data = String(doc.docFirmaFile || '');
