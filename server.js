@@ -10180,6 +10180,27 @@ const costruisciHtmlIncarico = (function () {
         : '<div class="firma-punti">………………………………………………………………………</div>';
       return `<div class="firma"><div class="firma-lab${evid ? ' evid-giallo' : ''}">${etichetta}</div>${_p}</div>`;
     };
+    const _fI = r.firma || {};
+    const _firmatoI = _fI.stato === 'firmato';
+    const _ag = _fI.agente || {};
+    const _dtOtp = _fI.firmatoIl ? propEsc(new Date(_fI.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) : '';
+    const _dtAg = _ag.firmatoIl ? propEsc(new Date(_ag.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) : '';
+    const _boxVend = _firmatoI
+      ? '<div style="position:absolute; left:14mm; bottom:52mm; width:92mm; border:1.4px solid #12803a; background:#eafaef; border-radius:8px; padding:7px 10px; font-family:Verdana,Arial,sans-serif; color:#0d5e2b;">'
+        + '<div style="font-size:10px; font-weight:800;">FIRMA VENDITORE (OTP)</div>'
+        + '<div style="font-size:9px; margin-top:2px;">' + propEsc(_fI.nome || '') + (_fI.codiceFiscale ? ' &middot; CF ' + propEsc(_fI.codiceFiscale) : '') + '</div>'
+        + (_dtOtp ? '<div style="font-size:8.5px;">' + _dtOtp + (_fI.telefono ? ' &middot; Tel ' + propEsc(_fI.telefono) : '') + '</div>' : '')
+        + '</div>'
+      : '';
+    const boxVendCorner = _boxVend;
+    const _boxAgInline = (_firmatoI && _ag.nome)
+      ? '<div style="margin-top:8px; width:92mm; border:1.4px solid #12803a; background:#eafaef; border-radius:8px; padding:7px 10px; font-family:Verdana,Arial,sans-serif; color:#0d5e2b;">'
+        + '<div style="font-size:10px; font-weight:800;">FIRMA AGENTE IMMOBILIARE</div>'
+        + '<div style="font-size:9px; margin-top:2px;">Forte Immobiliare Srl &middot; P.IVA/CF 13351090967</div>'
+        + '<div style="font-size:9px;">' + propEsc(_ag.nome) + (_ag.cf ? ' &middot; CF ' + propEsc(_ag.cf) : '') + '</div>'
+        + (_dtAg ? '<div style="font-size:8.5px;">' + _dtAg + '</div>' : '')
+        + '</div>'
+      : '';
     const tabellaNominativi = (elenco, righeMin) => {
       let righe = '';
       for (let n = 0; n < Math.max(righeMin, elenco.length); n++) {
@@ -10345,6 +10366,7 @@ const costruisciHtmlIncarico = (function () {
       <p class="spazio-sopra">Le parti hanno la facoltà di sottoporre le eventuali controversie derivanti dal presente contratto al tentativo di conciliazione previsto dallo Sportello di Conciliazione della locale Camera di Commercio di ${propEsc(A.cameraConciliazione)}, ove istituito.</p>
       <div class="box" style="min-height:40px">Note: ${propEsc(noteInc)}</div>
       <p class="spazio-grande">Luogo/Data: ${propEsc(A.citta)} &nbsp;&nbsp; ____ / ____ / ________</p>
+      ${_boxAgInline}
       ${firmaRiga('Firma Agente Immobiliare')}
       ${firmaRiga('Firma Parte Venditrice', true)}
       <p class="piccolo spazio-sopra">Ai sensi e per gli effetti degli artt. 1341 e 1342 Cod. Civ. il VENDITORE dichiara di approvare espressamente le seguenti clausole: 4) Durata e rinnovo dell'incarico, 9) Esclusiva se concessa, 10) Penale.</p>
@@ -10445,28 +10467,7 @@ const costruisciHtmlIncarico = (function () {
       @media print{ body{background:#fff} .toolbar{display:none} .pagina{margin:0;box-shadow:none;page-break-after:always;min-height:296mm} .pagina:last-child{page-break-after:auto} }
       @page{size:A4;margin:0}
     `;
-    const _fI = r.firma || {};
-    const _firmatoI = _fI.stato === 'firmato';
-    const _bs = 'position:absolute; left:14mm; width:92mm; border:1.4px solid #12803a; background:#eafaef; border-radius:8px; padding:7px 10px; font-family:Verdana,Arial,sans-serif; color:#0d5e2b;';
-    const _dtOtp = _fI.firmatoIl ? propEsc(new Date(_fI.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) : '';
-    const _boxVend = _firmatoI
-      ? '<div style="' + _bs + ' bottom:52mm;">'
-        + '<div style="font-size:10px; font-weight:800;">FIRMA VENDITORE (OTP)</div>'
-        + '<div style="font-size:9px; margin-top:2px;">' + propEsc(_fI.nome || '') + (_fI.codiceFiscale ? ' &middot; CF ' + propEsc(_fI.codiceFiscale) : '') + '</div>'
-        + (_dtOtp ? '<div style="font-size:8.5px;">' + _dtOtp + (_fI.telefono ? ' &middot; Tel ' + propEsc(_fI.telefono) : '') + '</div>' : '')
-        + '</div>'
-      : '';
-    const _ag = _fI.agente || {};
-    const _dtAg = _ag.firmatoIl ? propEsc(new Date(_ag.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) : '';
-    const _boxAg = (_firmatoI && _ag.nome)
-      ? '<div style="' + _bs + ' bottom:80mm;">'
-        + '<div style="font-size:10px; font-weight:800;">FIRMA AGENTE IMMOBILIARE</div>'
-        + '<div style="font-size:9px; margin-top:2px;">Forte Immobiliare Srl &middot; P.IVA/CF 13351090967</div>'
-        + '<div style="font-size:9px;">' + propEsc(_ag.nome) + (_ag.cf ? ' &middot; CF ' + propEsc(_ag.cf) : '') + '</div>'
-        + (_dtAg ? '<div style="font-size:8.5px;">' + _dtAg + '</div>' : '')
-        + '</div>'
-      : '';
-    const boxVendCorner = _boxAg + _boxVend;
+
 
     return `<!DOCTYPE html>
 <html lang="it"><head><meta charset="utf-8">
