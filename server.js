@@ -10612,27 +10612,8 @@ async function _pdfFirmato(doc, tipoMime, bytes) {
   }
 
   const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  const font = await pdf.embedFont(StandardFonts.HelveticaBold);
-  let pos = null;
-  try { pos = await _posizioniFirma(bytes); } catch (e) { pos = null; }
-  const pages = pdf.getPages();
-  let messe = 0;
-  const disegna = (lista, testo) => {
-    if (!testo || !lista || !lista.length) return;
-    // una firma per pagina (evito doppioni sulla stessa riga): tengo l'ultima occorrenza per pagina
-    const perPagina = {};
-    lista.forEach(function (m) { perPagina[m.page] = m; });
-    Object.keys(perPagina).forEach(function (k) {
-      const m = perPagina[k]; const pg = pages[m.page - 1]; if (!pg) return;
-      let yy = m.y - 11; if (yy < 6) yy = m.y + 6;
-      try { pg.drawText(testo, { x: Math.max(6, m.x), y: yy, size: 8, font: font, color: verde }); messe++; } catch (e) {}
-    });
-  };
-  disegna(pos && pos.acquirente, txtAcq);
-  disegna(pos && pos.agente, txtAg);
-
-  // Se non ho trovato nessuna riga adatta, aggiungo comunque una pagina di firma
-  if (!messe) await _aggiungiPaginaFirma(pdf, f);
+  // Riquadro OTP completo (firma cliente + controfirma agente) dentro al file.
+  await _aggiungiPaginaFirma(pdf, f);
   return Buffer.from(await pdf.save());
 }
 async function _aggiungiPaginaFirma(pdf, f) {
