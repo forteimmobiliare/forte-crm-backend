@@ -10587,16 +10587,27 @@ async function _testoPagine(bytes) {
 function _boxFirmaAngolo(page, f, PL, font, fontB) {
   const { rgb } = PL;
   const verde = rgb(0.05, 0.33, 0.17), bordo = rgb(0.07, 0.5, 0.23), sfondo = rgb(0.918, 0.98, 0.937);
+  const x = 22, w = 300;
+  const drawBox = (y, h, titolo, righe) => {
+    page.drawRectangle({ x: x, y: y, width: w, height: h, color: sfondo, borderColor: bordo, borderWidth: 1.2 });
+    let ty = y + h - 12;
+    page.drawText(String(titolo), { x: x + 7, y: ty, size: 8, font: fontB, color: verde }); ty -= 12;
+    righe.forEach(function (r) { if (r) { page.drawText(String(r), { x: x + 7, y: ty, size: 7.5, font: font, color: verde }); ty -= 11; } });
+  };
   const hasAg = !!(f.agente && f.agente.nome);
-  const w = 300, h = hasAg ? 88 : 58;
-  const x = 22, y = 22;  // angolo in basso a sinistra
-  page.drawRectangle({ x: x, y: y, width: w, height: h, color: sfondo, borderColor: bordo, borderWidth: 1.2 });
-  let ty = y + h - 12;
-  const T = (t, b, sz) => { page.drawText(String(t == null ? '' : t), { x: x + 7, y: ty, size: sz || 7.5, font: b ? fontB : font, color: verde }); ty -= (sz || 7.5) + 3.6; };
-  T('FIRMA ELETTRONICA (OTP)', true, 8);
-  if (hasAg) T('Agente: ' + f.agente.nome + (f.agente.cf ? ' - CF ' + f.agente.cf : ''), false, 7.5);  // agente SOPRA
-  T('Acquirente: ' + (f.nome || '') + (f.codiceFiscale ? ' - CF ' + f.codiceFiscale : ''), true, 7.5);
-  if (f.firmatoIl) T('Data: ' + new Date(f.firmatoIl).toLocaleString('it-IT') + (f.telefono ? ' - Tel ' + f.telefono : ''), false, 7);
+  // ACQUIRENTE (riquadro in basso)
+  const yAcq = 104, hAcq = 48;
+  drawBox(yAcq, hAcq, 'FIRMA ACQUIRENTE (OTP)', [
+    (f.nome || '') + (f.codiceFiscale ? '  CF ' + f.codiceFiscale : ''),
+    (f.firmatoIl ? 'Data ' + new Date(f.firmatoIl).toLocaleString('it-IT') : '') + (f.telefono ? '  Tel ' + f.telefono : '')
+  ]);
+  // AGENTE (riquadro sopra quello dell'acquirente)
+  if (hasAg) {
+    drawBox(yAcq + hAcq + 8, 48, 'FIRMA AGENTE IMMOBILIARE (controfirma)', [
+      'Forte Immobiliare Srl - P.IVA/CF 13351090967',
+      f.agente.nome + (f.agente.cf ? '  CF ' + f.agente.cf : '') + (f.agente.firmatoIl ? '  ' + new Date(f.agente.firmatoIl).toLocaleDateString('it-IT') : '')
+    ]);
+  }
 }
 async function _pdfFirmato(doc, tipoMime, bytes) {
   if (!_PDFLIB) return null;
