@@ -1,6 +1,7 @@
 const express = require('express');
 const https = require('https');
 const mongoose = require('mongoose');
+let _PDFLIB = null; try { _PDFLIB = require('pdf-lib'); } catch (e) { _PDFLIB = null; }  // per scrivere la firma dentro i PDF caricati
 const cors = require('cors');
 const app = express();
 
@@ -10465,7 +10466,7 @@ app.get('/api/pubblico/incarico/:id/documento', async (req, res) => {
   try {
     const inc = await Incarico.findById(req.params.id);
     if (!inc) return res.status(404).send('<p style="font-family:sans-serif;padding:24px">Incarico non trovato.</p>');
-    if (inc.docFirmaFile && _inviaFileCaricato(inc, req, res)) return;
+    if (inc.docFirmaFile && await _inviaFileCaricato(inc, req, res)) return;
     let agente = '';
     if (inc.consulente) {
       const c = await Consulente.findOne({ $or: [{ utente: inc.consulente }, { nomeCognome: inc.consulente }] }).catch(() => null);
@@ -10570,21 +10571,73 @@ function _timbroFirma(html, f) {
 /* Serve il file caricato dall'agente (PDF/immagine) al posto del documento
    generato: durante la lettura/firma lo manda cosi' com'e'; a firma avvenuta
    restituisce un certificato di firma (timbro + traccia) col file incorporato. */
-function _inviaFileCaricato(doc, req, res) {
+async function _pdfFirmato(doc, tipoMime, bytes) {
+  if (!_PDFLIB) return null;
+  const { PDFDocument, StandardFonts, rgb } = _PDFLIB;
+  let pdf;
+  if (tipoMime.indexOf('pdf') !== -1) {
+    pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
+  } else {
+    pdf = await PDFDocument.create();
+    const img = (tipoMime.indexOf('png') !== -1) ? await pdf.embedPng(bytes) : await pdf.embedJpg(bytes);
+    const pg = pdf.addPage([img.width, img.height]);
+    pg.drawImage(img, { x: 0, y: 0, width: img.width, height: img.height });
+  }
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
+  const page = pdf.addPage([595.28, 841.89]);
+  const f = doc.firma || {};
+  const verde = rgb(0.05, 0.33, 0.17);
+  page.drawRectangle({ x: 38, y: 505, width: 519, height: 285, borderColor: rgb(0.07, 0.5, 0.23), borderWidth: 2, color: rgb(0.918, 0.98, 0.937) });
+  let y = 760;
+  const L = (txt, bold, size) => { page.drawText(String(txt == null ? '' : txt), { x: 54, y: y, size: size || 11, font: bold ? fontB : font, color: verde }); y -= (size || 11) + 7; };
+  L('DOCUMENTO FIRMATO ELETTRONICAMENTE (OTP)', true, 15); y -= 5;
+  L('Firmatario: ' + (f.nome || ''), true, 12);
+  if (f.codiceFiscale) L('Codice Fiscale: ' + f.codiceFiscale, true, 12);
+  const nasc = [f.dataNascita || '', f.luogoNascita || ''].filter(Boolean).join(' - ');
+  if (nasc) L('Nato/a il ' + nasc, false, 11);
+  if (f.telefono) L('Telefono verificato: ' + f.telefono, false, 11);
+  if (f.firmatoIl) L('Data e ora della firma: ' + new Date(f.firmatoIl).toLocaleString('it-IT'), false, 11);
+  L('Codice OTP inviato via messaggio e confermato dal firmatario. IP: ' + (f.ip || ''), false, 9.5);
+  if (f.agente && f.agente.nome) {
+    y -= 9;
+    L('Controfirma dell\'AGENTE IMMOBILIARE', true, 12);
+    L('Agenzia: Forte Immobiliare Srl - P.IVA/CF 13351090967 - REA MI/2717652', false, 9.5);
+    L('Agente: ' + f.agente.nome + (f.agente.cf ? ' - CF ' + f.agente.cf : ''), false, 11);
+    if (f.agente.firmatoIl) L('Data e ora: ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT'), false, 9.5);
+  }
+  const out = await pdf.save();
+  return Buffer.from(out);
+}
+async function _inviaFileCaricato(doc, req, res) {
   const data = String(doc.docFirmaFile || '');
   const m = data.match(/^data:([^;]+);base64,(.*)$/);
   if (!m) return false;
   const tipoMime = m[1];
   const firmato = !!(doc.firma && doc.firma.stato === 'firmato');
-  if (req.query.raw === '1' || !firmato) {
-    const buf = Buffer.from(m[2], 'base64');
+  const nomeBase = String(doc.docFirmaNome || 'documento').replace(/[^\w.\- ]+/g, '_');
+  // non firmato, oppure richiesta esplicita dell'originale: servo il file com'e'
+  if (!firmato || req.query.raw === '1') {
     res.set('Content-Type', tipoMime);
-    res.set('Content-Disposition', 'inline; filename="' + String(doc.docFirmaNome || 'documento').replace(/[^\w.\- ]+/g, '_') + '"');
+    res.set('Content-Disposition', 'inline; filename="' + nomeBase + '"');
     res.set('Cache-Control', 'no-store');
-    res.send(buf);
+    res.send(Buffer.from(m[2], 'base64'));
     return true;
   }
-  // firmato: certificato + documento incorporato
+  // firmato: scrivo la firma DENTRO al PDF (pagina di firma in coda)
+  if (_PDFLIB) {
+    try {
+      const firmatoBuf = await _pdfFirmato(doc, tipoMime, Buffer.from(m[2], 'base64'));
+      if (firmatoBuf) {
+        res.set('Content-Type', 'application/pdf');
+        res.set('Content-Disposition', 'inline; filename="' + nomeBase.replace(/\.pdf$/i, '') + '-firmato.pdf"');
+        res.set('Cache-Control', 'no-store');
+        res.send(firmatoBuf);
+        return true;
+      }
+    } catch (e) { /* se fallisce, ripiego sul certificato */ }
+  }
+  // ripiego (pdf-lib assente): certificato HTML + file incorporato
   const rawUrl = req.path + '?raw=1';
   const timbroInterno = _timbroFirma('<body></body>', doc.firma).replace('<body>', '').replace('</body>', '');
   const html = '<!doctype html><html lang="it"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
@@ -10605,7 +10658,7 @@ app.get('/api/pubblico/proposta/:id/documento', async (req, res) => {
   try {
     const p = await Proposta.findById(req.params.id);
     if (!p) return res.status(404).send('<p style="font-family:sans-serif;padding:24px">Proposta non trovata.</p>');
-    if (p.docFirmaFile && _inviaFileCaricato(p, req, res)) return;
+    if (p.docFirmaFile && await _inviaFileCaricato(p, req, res)) return;
     let html = await _firmaDocumentoHtml('proposta', p);
     html = _timbroFirma(html, p.firma);
     res.set('Content-Type', 'text/html; charset=utf-8'); res.set('Cache-Control', 'no-store');
