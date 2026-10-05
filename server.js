@@ -10171,7 +10171,6 @@ const costruisciHtmlIncarico = (function () {
     const firmaValore = (etichetta) => {
       const f = r.firma || {};
       const lab = String(etichetta).toLowerCase();
-      if (f.agente && f.agente.nome && lab.indexOf('agente') !== -1) return 'Firmato digitalmente \u2014 ' + f.agente.nome + (f.agente.cf ? ' \u00b7 CF ' + f.agente.cf : '') + (f.agente.firmatoIl ? ' \u00b7 ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' }) : '');
       return '';
     };
     const firmaRiga = (etichetta, evid) => {
@@ -10447,13 +10446,27 @@ const costruisciHtmlIncarico = (function () {
       @page{size:A4;margin:0}
     `;
     const _fI = r.firma || {};
-    const boxVendCorner = (_fI.stato === 'firmato')
-      ? '<div style="position:absolute; left:14mm; bottom:26mm; width:90mm; border:1.4px solid #12803a; background:#eafaef; border-radius:8px; padding:8px 11px; font-family:Verdana,Arial,sans-serif; color:#0d5e2b;">'
+    const _firmatoI = _fI.stato === 'firmato';
+    const _bs = 'position:absolute; left:14mm; width:92mm; border:1.4px solid #12803a; background:#eafaef; border-radius:8px; padding:7px 10px; font-family:Verdana,Arial,sans-serif; color:#0d5e2b;';
+    const _dtOtp = _fI.firmatoIl ? propEsc(new Date(_fI.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) : '';
+    const _boxVend = _firmatoI
+      ? '<div style="' + _bs + ' bottom:52mm;">'
         + '<div style="font-size:10px; font-weight:800;">FIRMA VENDITORE (OTP)</div>'
         + '<div style="font-size:9px; margin-top:2px;">' + propEsc(_fI.nome || '') + (_fI.codiceFiscale ? ' &middot; CF ' + propEsc(_fI.codiceFiscale) : '') + '</div>'
-        + (_fI.firmatoIl ? '<div style="font-size:8.5px;">' + propEsc(new Date(_fI.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) + (_fI.telefono ? ' &middot; Tel ' + propEsc(_fI.telefono) : '') + '</div>' : '')
+        + (_dtOtp ? '<div style="font-size:8.5px;">' + _dtOtp + (_fI.telefono ? ' &middot; Tel ' + propEsc(_fI.telefono) : '') + '</div>' : '')
         + '</div>'
       : '';
+    const _ag = _fI.agente || {};
+    const _dtAg = _ag.firmatoIl ? propEsc(new Date(_ag.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' })) : '';
+    const _boxAg = (_firmatoI && _ag.nome)
+      ? '<div style="' + _bs + ' bottom:80mm;">'
+        + '<div style="font-size:10px; font-weight:800;">FIRMA AGENTE IMMOBILIARE</div>'
+        + '<div style="font-size:9px; margin-top:2px;">Forte Immobiliare Srl &middot; P.IVA/CF 13351090967</div>'
+        + '<div style="font-size:9px;">' + propEsc(_ag.nome) + (_ag.cf ? ' &middot; CF ' + propEsc(_ag.cf) : '') + '</div>'
+        + (_dtAg ? '<div style="font-size:8.5px;">' + _dtAg + '</div>' : '')
+        + '</div>'
+      : '';
+    const boxVendCorner = _boxAg + _boxVend;
 
     return `<!DOCTYPE html>
 <html lang="it"><head><meta charset="utf-8">
