@@ -10576,32 +10576,48 @@ async function _posizioniFirma(bytes) {
   if (!_PDFJS || !_PDFJS.getDocument) return null;
   const task = _PDFJS.getDocument({ data: new Uint8Array(bytes), isEvalSupported: false, disableFontFace: true });
   const doc = await task.promise;
-  const out = { acquirente: [], agente: [] };
+  const out = [];
   for (let pi = 1; pi <= doc.numPages; pi++) {
     const page = await doc.getPage(pi);
     let tc; try { tc = await page.getTextContent(); } catch (e) { continue; }
     (tc.items || []).forEach(function (it) {
       const raw = (it.str || '').trim();
-      if (!raw || raw.length > 44) return;
+      if (!raw || raw.length > 40) return;
       const str = raw.toLowerCase();
-      const x = it.transform[4], y = it.transform[5];
-      if (/venditr|promittente|promissario/.test(str)) return;
-      if (/proponente|acquirente/.test(str) || /\bfirma\b/.test(str)) out.acquirente.push({ page: pi, x: x, y: y });
-      if (/agente immobiliare|l.agente/.test(str) || /agenzia/.test(str)) out.agente.push({ page: pi, x: x, y: y });
+      // solo le righe di firma della PROPOSTA (proponente / parte acquirente / firma acquirente),
+      // mai la presa-visione dell'accettazione (promissario) ne' il venditore
+      if (/venditr|promittente|promissario|accettazione|ritiro/.test(str)) return;
+      const isFirmaProp = /proponente/.test(str) || /parte\s+acquirente/.test(str) || (/\bfirma\b/.test(str) && /acquirente/.test(str));
+      if (isFirmaProp) out.push({ page: pi, x: it.transform[4], y: it.transform[5] });
     });
   }
   try { await doc.destroy(); } catch (e) {}
   return out;
 }
+function _boxFirmaCompatto(page, xLine, yLine, f, PL, font, fontB) {
+  const { rgb } = PL;
+  const verde = rgb(0.05, 0.33, 0.17), bordo = rgb(0.07, 0.5, 0.23), sfondo = rgb(0.918, 0.98, 0.937);
+  const w = 330, h = (f.agente && f.agente.nome) ? 92 : 58;
+  const pw = page.getWidth();
+  let x = Math.max(8, Math.min(xLine, pw - w - 8));
+  let y = yLine - h - 3;
+  if (y < 8) y = yLine + 12;
+  page.drawRectangle({ x: x, y: y, width: w, height: h, color: sfondo, borderColor: bordo, borderWidth: 1.3 });
+  let ty = y + h - 13;
+  const T = (t, b, sz) => { page.drawText(String(t == null ? '' : t), { x: x + 8, y: ty, size: sz || 8, font: b ? fontB : font, color: verde }); ty -= (sz || 8) + 4; };
+  T('FIRMATO ELETTRONICAMENTE (OTP) - PROPOSTA', true, 8.5);
+  T((f.nome || '') + (f.codiceFiscale ? '   CF ' + f.codiceFiscale : ''), false, 8);
+  if (f.firmatoIl) T('Data: ' + new Date(f.firmatoIl).toLocaleString('it-IT') + (f.telefono ? '   Tel ' + f.telefono : ''), false, 7.5);
+  if (f.agente && f.agente.nome) {
+    T('Controfirma Agente: ' + f.agente.nome + (f.agente.cf ? '  CF ' + f.agente.cf : ''), false, 7.5);
+    T('Forte Immobiliare Srl - P.IVA/CF 13351090967 - REA MI/2717652', false, 7);
+  }
+}
 async function _pdfFirmato(doc, tipoMime, bytes) {
   if (!_PDFLIB) return null;
-  const { PDFDocument, StandardFonts, rgb } = _PDFLIB;
+  const { PDFDocument, StandardFonts } = _PDFLIB;
   const f = doc.firma || {};
-  const verde = rgb(0.05, 0.33, 0.17);
-  const txtAcq = 'Firmato (OTP): ' + (f.nome || '') + (f.codiceFiscale ? ' - CF ' + f.codiceFiscale : '') + (f.firmatoIl ? ' - ' + new Date(f.firmatoIl).toLocaleDateString('it-IT') : '');
-  const txtAg = (f.agente && f.agente.nome) ? ('Firmato: ' + f.agente.nome + (f.agente.cf ? ' - CF ' + f.agente.cf : '')) : '';
-
-  // Immagini: niente ricerca testo -> PDF con immagine + pagina firma
+  // Immagini: niente ricerca testo -> PDF con immagine + riquadro OTP in coda
   if (tipoMime.indexOf('pdf') === -1) {
     const pdfI = await PDFDocument.create();
     const img = (tipoMime.indexOf('png') !== -1) ? await pdfI.embedPng(bytes) : await pdfI.embedJpg(bytes);
@@ -10610,10 +10626,24 @@ async function _pdfFirmato(doc, tipoMime, bytes) {
     await _aggiungiPaginaFirma(pdfI, f);
     return Buffer.from(await pdfI.save());
   }
-
   const pdf = await PDFDocument.load(bytes, { ignoreEncryption: true });
-  // Riquadro OTP completo (firma cliente + controfirma agente) dentro al file.
-  await _aggiungiPaginaFirma(pdf, f);
+  const font = await pdf.embedFont(StandardFonts.Helvetica);
+  const fontB = await pdf.embedFont(StandardFonts.HelveticaBold);
+  let pos = null;
+  try { pos = await _posizioniFirma(bytes); } catch (e) { pos = null; }
+  const pages = pdf.getPages();
+  let messe = 0;
+  if (pos && pos.length) {
+    // un riquadro per pagina, sul punto firma della proposta
+    const perPagina = {};
+    pos.forEach(function (m) { perPagina[m.page] = m; });
+    Object.keys(perPagina).forEach(function (kk) {
+      const m = perPagina[kk]; const pg = pages[m.page - 1]; if (!pg) return;
+      try { _boxFirmaCompatto(pg, m.x, m.y, f, _PDFLIB, font, fontB); messe++; } catch (e) {}
+    });
+  }
+  // se non ho trovato il punto firma, metto il riquadro OTP completo in coda
+  if (!messe) await _aggiungiPaginaFirma(pdf, f);
   return Buffer.from(await pdf.save());
 }
 async function _aggiungiPaginaFirma(pdf, f) {
