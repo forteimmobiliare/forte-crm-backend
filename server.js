@@ -10520,7 +10520,7 @@ function _timbroFirma(html, f) {
   const stampa = (s) => String(s == null ? '' : s).replace(/</g, '&lt;');
   const quando = f.firmatoIl ? new Date(f.firmatoIl).toLocaleString('it-IT') : '';
   const nascita = [stampa(f.dataNascita || ''), stampa(f.luogoNascita || '')].filter(Boolean).join(' - ');
-  const timbro = '<div style="max-width:720px;margin:10mm auto;padding:16px 20px;border:2px solid #12803a;border-radius:10px;background:#eafaef;font-family:Verdana,Arial,sans-serif;color:#0d5e2b;">'
+  const timbro = '<div style="page-break-before:always;break-before:page;background:#fff;padding:18mm 14mm;"><div style="max-width:720px;margin:0 auto;padding:18px 22px;border:2px solid #12803a;border-radius:10px;background:#eafaef;font-family:Verdana,Arial,sans-serif;color:#0d5e2b;">'
     + '<div style="font-size:15px;font-weight:800;margin-bottom:6px;">✅ DOCUMENTO FIRMATO ELETTRONICAMENTE (OTP)</div>'
     + '<div style="font-size:12px;line-height:1.6;color:#14532d;">Firmatario: <b>' + stampa(f.nome || '') + '</b><br>'
     + (f.codiceFiscale ? 'Codice Fiscale: <b>' + stampa(f.codiceFiscale) + '</b><br>' : '')
@@ -10537,7 +10537,7 @@ function _timbroFirma(html, f) {
           + (f.agente.firmatoIl ? '<br>Data e ora: ' + stampa(new Date(f.agente.firmatoIl).toLocaleString('it-IT')) : '')
           + '</div>'
         : '')
-    + '</div>';
+    + '</div></div>';
   return html.indexOf('</body>') !== -1 ? html.replace('</body>', timbro + '</body>') : (html + timbro);
 }
 
