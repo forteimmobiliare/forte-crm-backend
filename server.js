@@ -9887,10 +9887,10 @@ const costruisciHtmlPropostaDoc = (function () {
         </table>
         <p class="spazio-sopra">La provvigione verrà corrisposta alla stipula del preliminare</p>
         <p class="spazio-sopra">Luogo/Data: ${propEsc(d.luogo)} &nbsp; ${propDataSpaziata(d.dataPresa)}</p>
-        <p class="spazio-sopra"><strong>L’Agente Immobiliare</strong> ………………………………………………………………………</p>
+        <p class="spazio-sopra"><strong>L’Agente Immobiliare</strong> ${firmaValore('agente') ? '<span style="color:#0d5e2b;font-weight:700">\u2714 ' + propEsc(firmaValore('agente')) + '</span>' : '………………………………………………………………………'}</p>
         <p class="spazio-sopra">(L'agenzia immobiliare dichiara che appena incasserà la cifra e rilascerà fattura alla parte venditrice)</p>
         <p class="spazio-sopra"><span class="evid-giallo grassetto">${etichettaParte}</span></p>
-        <p class="spazio-grande">……………………………………</p>
+        ${(String(etichettaParte).toLowerCase().indexOf('acquirente') !== -1 && firmaValore('Parte Acquirente')) ? '<p class="spazio-sopra" style="color:#0d5e2b;font-weight:700">\u2714 ' + propEsc(firmaValore('Parte Acquirente')) + '</p>' : '<p class="spazio-grande">……………………………………</p>'}
       `);
     }
 
@@ -10024,7 +10024,7 @@ const costruisciHtmlPropostaDoc = (function () {
 <style>${css}</style></head>
 <body>
 <div class="toolbar"><button onclick="window.print()">Stampa / Salva PDF</button></div>
-${copertina}${pag2}${pag3}${pag4}${pag5}${pag6}${pag7}${pag8}${pag9}${pag10}${pag11}${pag12}${pag13}${pag14}${pag15}${pag16}${pag17}
+${copertina}${pag2}${pag3}${pag4}${pag5}${pag6}${pag7}${pag8}${pag9}${pag10}${pag11}${pag12}${pag13}${pag14}
 </body></html>`;
   }
 
