@@ -6084,6 +6084,18 @@ function _fotoArrayIncarico(inc) {
   return out;
 }
 
+/* Converte un link Google Drive "grezzo" in URL immagine diretto (lh3), così la
+   <img> del sito la carica davvero. Se è già lh3, un data URI o un URL normale
+   lo lascia com'è. Usato per le foto profilo consulente nelle rotte pubbliche. */
+function _immagineDrive(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  if (s.indexOf('lh3.googleusercontent.com') !== -1 || s.indexOf('data:') === 0) return s;
+  const m = s.match(/\/file\/d\/([a-zA-Z0-9_-]+)/) || s.match(/[?&]id=([a-zA-Z0-9_-]+)/) || s.match(/\/d\/([a-zA-Z0-9_-]+)/);
+  if (m && m[1]) return 'https://lh3.googleusercontent.com/d/' + m[1] + '=w600';
+  return s;
+}
+
 app.get('/api/pubblico/immobili', async (req, res) => {
   try {
     const [incarichi, consulenti, openhouses] = await Promise.all([
@@ -6109,7 +6121,7 @@ app.get('/api/pubblico/immobili', async (req, res) => {
       mappaCons[(c.utente || '').toLowerCase().trim()] = {
         nome: c.nomeCognome || '',
         ruolo: c.ruolo || '',
-        foto: c.fotoProfilo || '',
+        foto: _immagineDrive(c.fotoProfilo),
         telefono: c.telefono || '',
         telefonoRaw: String(c.telefono || '').replace(/[^0-9+]/g, '')
       };
@@ -6184,7 +6196,7 @@ app.get('/api/pubblico/consulenti', async (req, res) => {
       utente: c.utente || '',
       nome: c.nomeCognome || '',
       ruolo: (c.ruoloPubblico || '').trim() || (c.ruolo || ''),
-      foto: c.fotoProfilo || '',
+      foto: _immagineDrive(c.fotoProfilo),
       bio: c.bioPubblica || '',
       valori: c.valoriPubblici || '',
       video: (c.videoPubblico || '').trim(),
