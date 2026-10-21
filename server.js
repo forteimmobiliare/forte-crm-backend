@@ -2862,6 +2862,12 @@ app.get('/api/report-proprietario/:idElemento', async (req, res) => {
         /* il numero grande resta quello delle visite davvero fatte */
         totale: visioniFatte.length,
         perFeedback: contaPerCampo(visioniFatte, 'feedbackAdv'),
+        /* I commenti delle visite, ANONIMI (niente nomi/contatti): data, esito,
+           testo del feedback e valore percepito. Per la sezione "Cosa dicono". */
+        feedbackVisite: visioniFatte
+          .filter(v => String(v.testoFeedback || '').trim())
+          .map(v => ({ data: v.dataVisione || '', feedback: v.feedbackAdv || '', testo: String(v.testoFeedback).trim(), valorePercepito: String(v.valorePercepito || '').trim() }))
+          .sort((a, b) => String(b.data).localeCompare(String(a.data))),
         possibili: {
           totale: visioniPossibili.length,
           quando: visioniPossibili
