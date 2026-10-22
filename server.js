@@ -4060,6 +4060,36 @@ app.get('/api/pubblico/openhouse-prenota/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+// Link STABILE per immobile: tutte le fasce (passate/presenti/future) di un incarico.
+// Un unico link da mandare una volta sola: col tempo mostra sempre le date attive.
+app.get('/api/pubblico/openhouse-immobile/:incarico', async (req, res) => {
+  try {
+    const incarico = String(req.params.incarico || '').trim();
+    if (!incarico) return res.status(400).json({ ok: false, error: 'Manca il riferimento all\'immobile' });
+    const ohs = await OpenHouse.find({
+      $or: [{ incaricoUfficio: incarico }, { 'immobiliExtra.incaricoUfficio': incarico }]
+    });
+    if (!ohs.length) return res.status(404).json({ ok: false, error: 'Nessun Evento Casa Forte per questo immobile' });
+    ohs.sort((a, b) => String(a.data || '').localeCompare(String(b.data || '')));
+    const eventi = [];
+    for (const oh of ohs) {
+      const prese = await PrenotazioneOpenHouse.find({ openHouseId: String(oh._id), stato: { $ne: 'Annullato' } });
+      const consulenti = await elencoConsulentiOH(oh);
+      const immobiliExtra = (Array.isArray(oh.immobiliExtra) ? oh.immobiliExtra : [])
+        .filter(x => x && (x.immobile || x.incaricoUfficio))
+        .map(x => ({ incaricoUfficio: x.incaricoUfficio || '', immobile: x.immobile || '' }));
+      eventi.push({
+        _id: oh._id, immobile: oh.immobile, immobiliExtra, data: oh.data, orario: oh.orario,
+        durataSlot: oh.durataSlot || 20, consulente: oh.consulente, consulenti, stato: oh.stato,
+        prenotati: prese.map(p => ({ slot: p.slot, consulente: p.consulente || oh.consulente || '' }))
+      });
+    }
+    // etichetta immobile: preferisco quella dell'evento con incarico principale = incarico richiesto
+    const principale = ohs.find(o => String(o.incaricoUfficio || '') === incarico && o.immobile) || ohs.find(o => o.immobile);
+    res.json({ ok: true, immobile: (principale && principale.immobile) || '', eventi });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Crea una prenotazione (dal link pubblico). Rifiuta se lo slot è già preso.
 app.post('/api/pubblico/openhouse-prenota', async (req, res) => {
   try {
