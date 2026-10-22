@@ -9991,7 +9991,7 @@ app.get('/api/pubblico/calendario/:utente', async (req, res) => {
         push({ tipo: 'openhouse', data: iso(o.data), orario: s,
           titolo: '⬜ Da fissare · ' + (o.immobile || 'Evento Casa Forte'), dettaglio: s + ' · fascia libera',
           registro: 'open-house', id: String(o._id), campo: 'data', modificabile: false,
-          slotLibero: true, slot: s, rif: rifB });
+          slotLibero: true, slot: s, rif: String(o.incaricoUfficio || '').trim() });
       });
     });
 
