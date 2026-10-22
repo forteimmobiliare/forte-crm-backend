@@ -9552,7 +9552,9 @@ app.get('/api/pubblico/richieste/:utente', async (req, res) => {
       if (!g) return '';
       return consulenti.some(c => c.utente === g) ? g : (perNome[g] || '');
     };
-    const suo = (r) => vedeTutto || !utente || chiDe(r) === utente;
+    // Consulenti che l'utente "segue" (consulentiVisibili): ne vede anche le richieste
+    const visibili = (io_ && Array.isArray(io_.consulentiVisibili)) ? io_.consulentiVisibili.map(x => String(x).trim()) : [];
+    const suo = (r) => vedeTutto || !utente || chiDe(r) === utente || visibili.indexOf(chiDe(r)) !== -1;
 
     const perCodice = {};
     incarichi.forEach(i => { const k = String(i.idElemento || '').trim(); if (k) perCodice[k] = i; });
