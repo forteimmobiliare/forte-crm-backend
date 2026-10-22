@@ -1832,7 +1832,7 @@ app.put('/api/consulenti/:id/permessi', async (req, res) => {
 // Modifica generica dei dati anagrafici di un consulente (nome, username, password, mail, telefono, telegram, whatsapp, foto, ruolo)
 app.put('/api/consulenti/:id', async (req, res) => {
   try {
-    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo', 'ruoloPubblico', 'bioPubblica', 'valoriPubblici', 'videoPubblico', 'telefonoPubblico', 'pubblicaInHome', 'ordinePubblico', 'agendaTipo'];
+    const campiConsentiti = ['nomeCognome', 'utente', 'pass', 'mail', 'telefono', 'idTelegram', 'idWhatsapp', 'fotoProfilo', 'ruolo', 'ruoloPubblico', 'bioPubblica', 'valoriPubblici', 'videoPubblico', 'telefonoPubblico', 'pubblicaInHome', 'ordinePubblico', 'agendaTipo', 'teamLeaderRif'];
     const aggiornamento = {};
     for (const campo of campiConsentiti) {
       if (req.body[campo] !== undefined) aggiornamento[campo] = req.body[campo];
