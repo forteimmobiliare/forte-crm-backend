@@ -6469,11 +6469,18 @@ function _gemReq(metodo, percorso, corpo) {
     body: corpo ? JSON.stringify(corpo) : undefined
   }).then(async r => { const t = await r.text(); let j = {}; try { j = JSON.parse(t); } catch (e) { j = { testo: t }; } return { ok: r.ok, status: r.status, j }; });
 }
+const _veoDiagnosi = { totale: 0, errore: '', nomi: [] };
+// nomi Veo noti, in ordine di preferenza: si provano anche se l'elenco di Google non li mostra
+const _VEO_NOTI_FAST = ['veo-3.1-fast-generate-preview', 'veo-3.1-fast-generate-001', 'veo-3.0-fast-generate-001', 'veo-3.0-fast-generate-preview', 'veo-3.1-lite-generate-preview'];
+const _VEO_NOTI_TOP = ['veo-3.1-generate-preview', 'veo-3.1-generate-001', 'veo-3.0-generate-001', 'veo-3.0-generate-preview', 'veo-2.0-generate-001'];
 async function _veoModelli() {
   if (_veoModelliCache) return _veoModelliCache;
   const out = []; let token = '';
+  _veoDiagnosi.totale = 0; _veoDiagnosi.errore = ''; _veoDiagnosi.nomi = [];
   for (let k = 0; k < 5; k++) {
     const r = await _gemReq('GET', 'models?pageSize=200' + (token ? '&pageToken=' + encodeURIComponent(token) : ''));
+    if (!r.ok) { _veoDiagnosi.errore = (r.j.error && r.j.error.message) || ('errore ' + r.status); break; }
+    (r.j.models || []).forEach(m => { _veoDiagnosi.totale++; if (/veo|video/i.test(m.name)) _veoDiagnosi.nomi.push(m.name + ' [' + (m.supportedGenerationMethods || []).join(',') + ']'); });
     (r.j.models || []).forEach(m => { if (/veo/i.test(m.name) && (m.supportedGenerationMethods || []).some(x => /predictLongRunning/i.test(x))) out.push(m.name.replace(/^models\//, '')); });
     token = r.j.nextPageToken; if (!token) break;
   }
@@ -6485,13 +6492,14 @@ async function _veoScegli(qualita) {
   if (qualita !== 'top' && process.env.VEO_MODELLO) return process.env.VEO_MODELLO;
   const m = await _veoModelli();
   const versione = n => { const x = String(n).match(/veo-(\d+)(?:\.(\d+))?/); return x ? (+x[1]) * 10 + (+(x[2] || 0)) : 0; };
+  if (!m.length) return (qualita === 'top' ? _VEO_NOTI_TOP : _VEO_NOTI_FAST)[0];
   const ord = m.slice().sort((a, b) => versione(b) - versione(a));
   const fast = ord.filter(n => /fast/i.test(n)), top = ord.filter(n => !/fast|lite/i.test(n));
   return qualita === 'top' ? (top[0] || ord[0]) : (fast[0] || ord.find(n => /lite/i.test(n)) || ord[0]);
 }
 const _VEO_MOVIMENTI = ['slow smooth dolly forward into the room', 'slow smooth lateral pan from left to right', 'slow smooth lateral pan from right to left', 'gentle slow push-in towards the center of the room', 'slow smooth orbit around the room center', 'slow smooth crane up revealing the space'];
 app.get('/api/video-ai/modelli', async (req, res) => {
-  try { if (!GEMINI_API_KEY) return res.json({ ok: false, error: 'Chiave Gemini assente' }); _veoModelliCache = null; const m = await _veoModelli(); res.json({ ok: true, modelli: m, scelto: { fast: await _veoScegli('fast'), top: await _veoScegli('top') } }); }
+  try { if (!GEMINI_API_KEY) return res.json({ ok: false, error: 'Chiave Gemini assente' }); _veoModelliCache = null; const m = await _veoModelli(); res.json({ ok: true, modelli: m, diagnosi: _veoDiagnosi, scelto: { fast: await _veoScegli('fast'), top: await _veoScegli('top') } }); }
   catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 app.post('/api/video-ai/clip', async (req, res) => {
@@ -6519,18 +6527,28 @@ app.post('/api/video-ai/clip', async (req, res) => {
       'No people, no animals, no text, no logos, no new objects, no warping or morphing.';
     const parametri = { aspectRatio: b.formato === 'o' ? '16:9' : '9:16', durationSeconds: top ? 8 : 6, negativePrompt: 'people, person, text, watermark, logo, distortion, warping, morphing, melting furniture, fast motion, shaky camera, cartoon' };
     if (top) parametri.resolution = '1080p';
-    let r = await _gemReq('POST', 'models/' + modello + ':predictLongRunning', { instances: [{ prompt, image: { bytesBase64Encoded: b64, mimeType: mime } }], parameters: parametri });
-    // se un parametro non è accettato da questo modello, riprovo con il minimo indispensabile
-    if (!r.ok && r.status === 400) r = await _gemReq('POST', 'models/' + modello + ':predictLongRunning', { instances: [{ prompt, image: { bytesBase64Encoded: b64, mimeType: mime } }], parameters: { aspectRatio: parametri.aspectRatio } });
+    const corpo = (par) => ({ instances: [{ prompt, image: { bytesBase64Encoded: b64, mimeType: mime } }], parameters: par });
+    const candidati = [modello].concat(top ? _VEO_NOTI_TOP : _VEO_NOTI_FAST).filter((x, i, a) => x && a.indexOf(x) === i);
+    let r = null, modelloUsato = modello; const tentativi = [];
+    for (const nome of candidati) {
+      modelloUsato = nome;
+      r = await _gemReq('POST', 'models/' + nome + ':predictLongRunning', corpo(parametri));
+      // se un parametro non è accettato da questo modello, riprovo con il minimo indispensabile
+      if (!r.ok && r.status === 400) r = await _gemReq('POST', 'models/' + nome + ':predictLongRunning', corpo({ aspectRatio: parametri.aspectRatio }));
+      if (r.ok && r.j.name) break;
+      tentativi.push(nome + ': ' + ((r.j.error && r.j.error.message) || r.status));
+      if (r.status !== 404 && r.status !== 400) break;   // es. 403/429: inutile provare altri nomi
+    }
+    if (r && !(r.ok && r.j.name) && tentativi.length) r.j.error = { message: tentativi.join(' | ') };
     if (!r.ok || !r.j.name) {
       const msg = (r.j.error && r.j.error.message) || ('errore ' + r.status);
-      try { await segnaNelDiario('veo', 'errore', 'clip video AI', msg, modello); } catch (e) {}
-      return res.status(502).json({ ok: false, error: msg, modello });
+      try { await segnaNelDiario('veo', 'errore', 'clip video AI', msg, modelloUsato); } catch (e) {}
+      return res.status(502).json({ ok: false, error: msg, modello: modelloUsato });
     }
     _veoContatore.n++;
     _veoOperazioni[r.j.name] = { utente: cons.utente, uri: '', creata: Date.now() };
-    try { await segnaNelDiario('veo', 'ok', 'clip video AI avviata', modello + ' · ' + parametri.durationSeconds + 's', cons.utente); } catch (e) {}
-    res.json({ ok: true, op: r.j.name, modello, secondi: parametri.durationSeconds });
+    try { await segnaNelDiario('veo', 'ok', 'clip video AI avviata', modelloUsato + ' · ' + parametri.durationSeconds + 's', cons.utente); } catch (e) {}
+    res.json({ ok: true, op: r.j.name, modello: modelloUsato, secondi: parametri.durationSeconds });
   } catch (e) { res.status(500).json({ ok: false, error: e.message }); }
 });
 app.get('/api/video-ai/stato', async (req, res) => {
