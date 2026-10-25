@@ -10743,15 +10743,19 @@ app.get('/api/pubblico/calendario/:utente', async (req, res) => {
       }
       return { comune, via, civico: String(i.civico || '').trim() };
     };
-    const incarichiApp = incarichi.filter(suo)
+    /* il Broker lavora su tutti gli immobili (eventi Casa Forte, sessioni, appuntamenti
+       anche per gli incarichi dei colleghi); gli altri solo sui propri */
+    const nomeDiCons = {}; consulenti.forEach(c => { nomeDiCons[c.utente] = c.nomeCognome || c.utente; });
+    const incarichiApp = incarichi.filter(i => suo(i) || vedeTuttoOH)
       .filter(i => FUORI.indexOf(String(i.statoImmobile || '')) === -1)
       .map(i => {
         const d = dove(i);
         const strada = [d.via, d.civico].filter(Boolean).join(' ');
+        const diAltro = !suo(i) && chiDe(i) ? (' \u00b7 di ' + String(nomeDiCons[chiDe(i)] || chiDe(i)).split(' ')[0]) : '';
         const etichetta = [String(i.idElemento || '').trim(), [d.comune, strada].filter(Boolean).join(' \u00b7 ') || String(i.nome || '')]
-          .filter(Boolean).join(' \u00b7 ');
+          .filter(Boolean).join(' \u00b7 ') + diAltro;
         return { id: String(i._id), nome: etichetta || 'Incarico', rif: i.idElemento || '',
-                 comune: d.comune, via: strada };
+                 comune: d.comune, via: strada, consulente: chiDe(i) };
       })
       .sort((a, b) => (a.comune || '').localeCompare(b.comune || '', 'it') || (a.via || '').localeCompare(b.via || '', 'it'));
     const opportunityApp = opportunity.filter(suo)
