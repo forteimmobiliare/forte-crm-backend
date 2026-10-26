@@ -7,7 +7,12 @@ const cors = require('cors');
 const app = express();
 
 app.use(cors());
-app.use(express.json({ limit: '50mb' }));   // i lotti dei perimetri OMI possono essere pesanti
+app.use(express.json({
+  limit: '50mb',   // i lotti dei perimetri OMI possono essere pesanti
+  /* la firma di ElevenLabs si controlla sul corpo esatto arrivato, non su
+     quello gia' trasformato in oggetto: lo tengo da parte solo per la voce */
+  verify: (req, res, buf) => { if (String(req.originalUrl || '').startsWith('/api/voce/')) req.corpoGrezzo = buf; }
+}));
 
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
@@ -499,7 +504,13 @@ const BancaDatiSchema = new mongoose.Schema({
   centralinoOrigineId: { type: String, default: '' }, // evita duplicati quando un item torna "Completo"
   /* Scheda cliente compilata dal link riservato (il cliente completa le sue preferenze) */
   noteCliente: { type: String, default: '' },
-  schedaClienteCompilataIl: { type: String, default: '' }  // ISO di quando il cliente ha compilato la pagina riservata
+  schedaClienteCompilataIl: { type: String, default: '' },  // ISO di quando il cliente ha compilato la pagina riservata
+  /* Servizio Anteprima: il cliente accetta di essere avvisato anche
+     dall'assistente AI (messaggi + chiamate). Senza "Sì" l'AI non lo chiama. */
+  anteprimaAi: { type: String, default: '' },        // 'Sì' | 'No' | ''
+  anteprimaAiIl: { type: String, default: '' },      // ISO di quando l'ha detto
+  anteprimaAiCome: { type: String, default: '' },    // da dove: "telefonata AI", "WhatsApp"...
+  nonContattare: { type: Boolean, default: false }   // ha chiesto di non essere piu' cercato
 }, { timestamps: true });
 const BancaDati = mongoose.model('BancaDati', BancaDatiSchema);
 
@@ -8055,6 +8066,212 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
 }
 
 
+
+/* ==========================================
+   OPERATORE AI AL TELEFONO (Giulia, su ElevenLabs).
+   Il numero Google Voice gira le chiamate a Giulia; a fine chiamata
+   ElevenLabs manda qui trascrizione, riassunto e i dati che ha raccolto
+   (motivo, nome, immobile, ricerca, quando richiamare, Servizio Anteprima).
+   Da qui nasce la riga nel Registro Chiamate come per le mail, e il
+   consulente viene avvisato su Telegram. Giulia non passa mai la chiamata
+   a nessuno: chi vuole una persona diventa un "Da richiamare".
+   La firma si controlla con ELEVENLABS_WEBHOOK_SECRET (su Render).
+========================================== */
+const ChiamataAiSchema = new mongoose.Schema({
+  idConversazione: { type: String, required: true, unique: true },  // ElevenLabs puo' rimandare lo stesso avviso
+  telefono: { type: String, default: '' },
+  durataSecondi: { type: Number, default: 0 },
+  inizio: { type: Date, default: null },
+  riassunto: { type: String, default: '' },
+  trascrizione: { type: String, default: '' },
+  dati: { type: mongoose.Schema.Types.Mixed, default: {} },
+  esito: { type: String, default: '' },          // creata | prova senza numero | ...
+  centralinoId: { type: String, default: '' },
+  bancaDatiId: { type: String, default: '' }
+}, { timestamps: true });
+const ChiamataAi = mongoose.model('ChiamataAi', ChiamataAiSchema);
+
+/* "t=1700000000,v0=abc..." — HMAC-SHA256 di "t.corpo" con il segreto.
+   Oltre mezz'ora di differenza vuol dire un avviso vecchio rimandato. */
+function firmaElevenLabsValida(intestazione, corpo) {
+  const segreto = process.env.ELEVENLABS_WEBHOOK_SECRET;
+  if (!segreto || !intestazione || !corpo) return false;
+  const parti = {};
+  String(intestazione).split(',').forEach(p => {
+    const i = p.indexOf('=');
+    if (i > 0) parti[p.slice(0, i).trim()] = p.slice(i + 1).trim();
+  });
+  const t = Number(parti.t);
+  if (!t || !parti.v0 || Math.abs(Date.now() / 1000 - t) > 30 * 60) return false;
+  const c = require('crypto');
+  const atteso = c.createHmac('sha256', segreto).update(parti.t + '.' + corpo.toString('utf8')).digest('hex');
+  const a = Buffer.from(atteso), b = Buffer.from(parti.v0);
+  return a.length === b.length && c.timingSafeEqual(a, b);
+}
+
+/* i dati raccolti arrivano come { campo: { value, rationale } }: tengo solo
+   i valori, e "no"/"none"/"null" detti a voce valgono come vuoto */
+function datiRaccoltiDaGiulia(analisi) {
+  const grezzi = (analisi && analisi.data_collection_results) || {};
+  const fuori = {};
+  Object.keys(grezzi).forEach(k => {
+    const v = grezzi[k] && typeof grezzi[k] === 'object' ? grezzi[k].value : grezzi[k];
+    if (v === null || v === undefined) return;
+    const s = String(v).trim();
+    if (!s || /^(none|null|n\/a|nessuno|non (detto|indicato|specificato))$/i.test(s)) return;
+    fuori[k] = s;
+  });
+  return fuori;
+}
+
+const _siVoce = (v) => /^(s[iì]|yes|true|vero)$/i.test(String(v || '').trim());
+
+app.post('/api/voce/fine-chiamata', async (req, res) => {
+  if (!process.env.ELEVENLABS_WEBHOOK_SECRET) {
+    console.error('Chiamata AI: manca ELEVENLABS_WEBHOOK_SECRET su Render');
+    return res.status(503).json({ error: 'segreto non configurato' });
+  }
+  if (!firmaElevenLabsValida(req.get('elevenlabs-signature'), req.corpoGrezzo)) {
+    return res.status(401).json({ error: 'firma non valida' });
+  }
+  /* ElevenLabs vuole una risposta subito: il lavoro lo faccio dopo */
+  res.status(200).json({ ricevuto: true });
+
+  try {
+    const corpo = req.body || {};
+    if (corpo.type && corpo.type !== 'post_call_transcription') return;
+    const d = corpo.data || {};
+    const idConversazione = String(d.conversation_id || '').trim();
+    if (!idConversazione) return;
+    if (await ChiamataAi.findOne({ idConversazione }).catch(() => null)) return;
+
+    const meta = d.metadata || {};
+    const variabili = (d.conversation_initiation_client_data || {}).dynamic_variables || {};
+    const telefono = String((meta.phone_call && meta.phone_call.external_number) ||
+      variabili.system__caller_id || '').trim();
+    const analisi = d.analysis || {};
+    const dati = datiRaccoltiDaGiulia(analisi);
+    const riassunto = String(analisi.transcript_summary || '').trim();
+    const durata = Math.round(Number(meta.call_duration_secs) || 0);
+    const trascrizione = (Array.isArray(d.transcript) ? d.transcript : [])
+      .filter(t => t && t.message)
+      .map(t => (t.role === 'agent' ? 'Giulia: ' : 'Cliente: ') + t.message)
+      .join('\n');
+
+    const chiamata = await ChiamataAi.create({
+      idConversazione, telefono, durataSecondi: durata,
+      inizio: meta.start_time_unix_secs ? new Date(meta.start_time_unix_secs * 1000) : null,
+      riassunto, trascrizione, dati
+    });
+
+    /* le prove fatte dal browser di ElevenLabs non hanno un numero: le tengo
+       come chiamata, ma non sveglio nessun consulente */
+    if (!telefono) {
+      chiamata.esito = 'prova senza numero';
+      await chiamata.save().catch(() => {});
+      await segnaNelDiario('voce', 'saltato', 'chiamata di prova',
+        'nessun numero del chiamante · ' + (riassunto || '').slice(0, 80), 'Giulia AI');
+      return;
+    }
+
+    const motivo = String(dati.motivo || '').toLowerCase();
+    const compra = /acquist|compra|affitt|cerca/.test(motivo);
+    const impostazioni = (await impostazioniLead().catch(() => null)) || {};
+    const destinazione = await aChiVa(dati.immobile_codice || '', impostazioni,
+      [dati.immobile_codice, dati.immobile_indirizzo, riassunto].filter(Boolean).join('\n'));
+
+    const minuti = durata ? (durata < 60 ? durata + ' sec' : Math.round(durata / 60) + ' min') : '';
+    const righe = [
+      '📞 Telefonata con Giulia (AI)' + (minuti ? ' · ' + minuti : ''),
+      dati.motivo ? 'Motivo: ' + dati.motivo : '',
+      riassunto ? 'Riassunto: ' + riassunto : '',
+      compra && (dati.comuni || dati.tipologia || dati.budget)
+        ? 'Cerca: ' + [dati.tipologia, dati.comuni, dati.budget ? 'budget ' + dati.budget : ''].filter(Boolean).join(' · ') : '',
+      dati.mutuo ? 'Mutuo: ' + dati.mutuo : '',
+      dati.deve_vendere ? 'Deve vendere: ' + dati.deve_vendere : '',
+      dati.tempi ? 'Tempi: ' + dati.tempi : '',
+      dati.immobile_indirizzo && !destinazione.riconosciuto ? 'Immobile: ' + dati.immobile_indirizzo : '',
+      dati.quando_richiamare ? '☎️ Richiamare: ' + dati.quando_richiamare : '',
+      _siVoce(dati.urgente) ? '⚠️ URGENTE (cliente insoddisfatto)' : '',
+      _siVoce(dati.non_contattare) ? '⛔ Chiede di non essere più contattato' : '',
+      dati.anteprima_consenso ? 'Servizio Anteprima: ' + dati.anteprima_consenso : '',
+      dati.note ? 'Note: ' + dati.note : ''
+    ].filter(Boolean);
+
+    const riga = await Centralino.create({
+      nome: dati.nome || ('Chiamata ' + telefono),
+      telefonoCliente: telefono,
+      messaggioCliente: righe.join('\n'),
+      tipoRichiesta: 'Telefonata AI',
+      fonteRichiesta: 'Telefono AI',
+      stato: 'Da Fare',
+      consulente: destinazione.consulente,
+      riferimentoImmobile: destinazione.codice || '',
+      incaricoCollegatoId: destinazione.incaricoId || '',
+      portaleOrigine: 'Giulia AI',
+      /* l'avviso lo mando io qui sotto, anche senza immobile (un proprietario
+         o un "Da richiamare" va avvisato lo stesso): questo ferma il gancio
+         automatico del Registro, che altrimenti la segnerebbe incompleta */
+      tgConsInviato: '⏳ Si invia'
+    });
+    chiamata.centralinoId = String(riga._id);
+    chiamata.esito = 'creata';
+
+    const scenTg = await Scenario.findOne({ azione: 'telegram-consulente' }).catch(() => null);
+    if (!scenTg || scenTg.attivo) {
+      await mandaAvvisoTelegram(riga, true);
+    } else {
+      riga.tgConsInviato = '';
+      await riga.save().catch(() => {});
+    }
+
+    /* Banca Dati: l'avviso crea il contatto per ogni richiesta. Tengo solo chi
+       compra o affitta, e se il numero era gia' in archivio aggiorno quello. */
+    const nuovo = await BancaDati.findOne({ centralinoOrigineId: String(riga._id) }).catch(() => null);
+    const cifre = telefono.replace(/\D/g, '').slice(-9);
+    const vecchio = cifre.length >= 8
+      ? await BancaDati.findOne({
+          telefono: new RegExp(cifre.split('').join('[\\s.\\-]*') + '$'),
+          ...(nuovo ? { _id: { $ne: nuovo._id } } : {})
+        }).sort({ updatedAt: -1 }).catch(() => null)
+      : null;
+    if (!compra && !vecchio) {
+      if (nuovo) await BancaDati.deleteOne({ _id: nuovo._id }).catch(() => {});
+    } else {
+      const scheda = vecchio || nuovo || await creaBancaDatiDaCentralino(riga);
+      if (vecchio && nuovo) await BancaDati.deleteOne({ _id: nuovo._id }).catch(() => {});
+      if (scheda) {
+        const oggi = new Date().toISOString().slice(0, 10);
+        if (compra) {
+          if (dati.comuni) scheda.comuniRicerca = dati.comuni.split(/[,;\/]| e /).map(s => s.trim()).filter(Boolean);
+          if (dati.tipologia) scheda.tipologiaUnita = [dati.tipologia];
+          if (dati.budget) scheda.budgetAcquisto = dati.budget;
+          if (dati.mutuo) scheda.mutuo = dati.mutuo;
+          if (dati.deve_vendere) scheda.deveVendere = dati.deve_vendere;
+          if (dati.tempi) scheda.scadenzaAcquistoIdeale = dati.tempi;
+        }
+        scheda.feedbackContatto = ('Telefonata AI ' + oggi + ': ' + (riassunto || dati.motivo || '')).slice(0, 1000);
+        scheda.dataUltimoContatto = oggi;
+        if (dati.anteprima_consenso) {
+          scheda.anteprimaAi = _siVoce(dati.anteprima_consenso) ? 'Sì' : 'No';
+          scheda.anteprimaAiIl = new Date().toISOString();
+          scheda.anteprimaAiCome = 'telefonata AI ' + idConversazione;
+        }
+        if (_siVoce(dati.non_contattare)) { scheda.nonContattare = true; scheda.anteprimaAi = 'No'; }
+        await scheda.save().catch(e => console.error('Banca Dati da chiamata AI:', e.message));
+        chiamata.bancaDatiId = String(scheda._id);
+      }
+    }
+    await chiamata.save().catch(() => {});
+
+    await segnaNelDiario('voce', 'ok', 'chiamata con Giulia',
+      (dati.nome || telefono) + (dati.motivo ? ' · ' + dati.motivo : '') +
+      (destinazione.codice ? ' · ' + destinazione.codice : ''), 'Giulia AI');
+  } catch (e) {
+    console.error('Chiamata AI non registrata:', e.message);
+    await segnaNelDiario('voce', 'errore', 'chiamata non registrata', e.message, 'Giulia AI').catch(() => {});
+  }
+});
 
 /* Per provare senza aspettare una mail vera: si incolla il testo e si vede
    cosa ne esce, senza mandare niente a nessuno. */
