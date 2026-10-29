@@ -14,6 +14,24 @@ app.use(express.json({
   verify: (req, res, buf) => { if (String(req.originalUrl || '').startsWith('/api/voce/')) req.corpoGrezzo = buf; }
 }));
 
+/* La Concorrenza (~5.000 annunci, ~4 MB) dal database arriva col contagocce: ~40 s
+   a ogni lettura, e il CRM resta li' fermo. Ne tengo una copia pronta (anche gzip)
+   e la butto a ogni scrittura: le richieste non-GET alle rotte concorrenza la
+   invalidano prima e dopo, e gli agganci sullo schema coprono le scritture da
+   qualunque altra rotta. */
+const zlib = require('zlib');
+let CACHE_CONCORRENZA = null;      // { json: Buffer, gz: Buffer, quando: ms }
+let CARICA_CONCORRENZA = null;     // promessa in corso: le richieste insieme aspettano la stessa lettura
+let VERSIONE_CONCORRENZA = 0;
+function invalidaCacheConcorrenza() { CACHE_CONCORRENZA = null; VERSIONE_CONCORRENZA++; }
+app.use((req, res, next) => {
+  if (req.method !== 'GET' && /^\/api\/.*concorrenza/i.test(String(req.path || ''))) {
+    invalidaCacheConcorrenza();
+    res.on('finish', invalidaCacheConcorrenza);
+  }
+  next();
+});
+
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
   console.error('ERRORE CRITICO: La variabile MONGO_URI non è configurata su Render!');
@@ -28,6 +46,7 @@ if (!process.env.GOOGLE_MAPS_API_KEY_SERVER) {
 mongoose.connect(mongoURI)
   .then(() => {
     console.log('Database MongoDB Cloud Connesso con Successo!');
+    cacheConcorrenza().catch(() => {});   // la preparo subito, cosi' la prima apertura non aspetta
     impostaBrokerPredefinito();
   })
   .catch((err) => console.error('Errore critico di connessione DB:', err));
@@ -339,6 +358,8 @@ const ConcorrenzaSchema = new mongoose.Schema({
   /* l'ultimo report scritto per il proprietario: {quando, titolo, punti[], lettera, fatti} */
   reportProprietario: { type: mongoose.Schema.Types.Mixed, default: null }
 }, { timestamps: true });
+['save', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndDelete', 'deleteOne', 'deleteMany']
+  .forEach(op => ConcorrenzaSchema.post(op, () => invalidaCacheConcorrenza()));
 const Concorrenza = mongoose.model('Concorrenza', ConcorrenzaSchema);
 
 /* ==========================================
@@ -2127,10 +2148,30 @@ app.delete('/api/stradario/:comuneId', async (req, res) => {
 /* ==========================================
    ROTTE API: CONCORRENZA MANUALE ED EXCEL
 ========================================== */
+async function cacheConcorrenza() {
+  if (CACHE_CONCORRENZA && Date.now() - CACHE_CONCORRENZA.quando < 15 * 60 * 1000) return CACHE_CONCORRENZA;
+  if (!CARICA_CONCORRENZA) {
+    const versione = VERSIONE_CONCORRENZA;
+    CARICA_CONCORRENZA = (async () => {
+      const elenco = await Concorrenza.find({}).sort({ createdAt: -1 }).lean();
+      const json = Buffer.from(JSON.stringify(elenco));
+      const pronto = { json, gz: zlib.gzipSync(json), quando: Date.now() };
+      if (versione === VERSIONE_CONCORRENZA) CACHE_CONCORRENZA = pronto;   // scritto qualcosa nel frattempo: non la tengo
+      return pronto;
+    })().finally(() => { CARICA_CONCORRENZA = null; });
+  }
+  return CARICA_CONCORRENZA;
+}
 app.get('/api/concorrenza', async (req, res) => {
   try {
-    const elenco = await Concorrenza.find({}).sort({ createdAt: -1 });
-    res.status(200).json(elenco);
+    const c = await cacheConcorrenza();
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Vary', 'Accept-Encoding');
+    if (/\bgzip\b/.test(String(req.headers['accept-encoding'] || ''))) {
+      res.set('Content-Encoding', 'gzip');
+      return res.status(200).send(c.gz);
+    }
+    res.status(200).send(c.json);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
