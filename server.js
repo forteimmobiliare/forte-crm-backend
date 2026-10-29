@@ -14,6 +14,62 @@ app.use(express.json({
   verify: (req, res, buf) => { if (String(req.originalUrl || '').startsWith('/api/voce/')) req.corpoGrezzo = buf; }
 }));
 
+/* COPIA IN MEMORIA DELLE SEZIONI PESANTI. Il database (Atlas) passa i dati a
+   ~100-200 KB/s: Incarichi, Concorrenza, Stradario, Banca Dati da 2-4 MB l'uno
+   ci mettevano 25-45 s e il CRM restava fermo all'accesso. Ogni elenco si legge
+   dal database una volta, poi si serve dalla memoria (anche gzip). Qualunque
+   scrittura su quel modello (da qualsiasi rotta) o richiesta non-GET sulla sua
+   rotta butta la copia; in piu' scade da sola dopo 10 minuti. */
+const zlib = require('zlib');
+const CACHE_ELENCHI = {
+  '/api/incarichi': 'Incarico', '/api/concorrenza': 'Concorrenza', '/api/stradario': 'Stradario',
+  '/api/banca-dati': 'BancaDati', '/api/centralino': 'Centralino', '/api/capitale-sociale': 'CapitaleSociale'
+};
+const _cacheElenchi = {};      // percorso -> { json, gz, quando }
+const _versioneElenchi = {};   // percorso -> numero, sale a ogni invalidazione
+function invalidaElenco(percorso) { delete _cacheElenchi[percorso]; _versioneElenchi[percorso] = (_versioneElenchi[percorso] || 0) + 1; }
+function invalidaElenchiDelModello(nomeModello) {
+  Object.keys(CACHE_ELENCHI).forEach(p => { if (CACHE_ELENCHI[p] === nomeModello) invalidaElenco(p); });
+}
+mongoose.plugin(schema => {
+  ['save', 'insertMany', 'updateOne', 'updateMany', 'findOneAndUpdate', 'findOneAndDelete', 'findOneAndReplace',
+   'replaceOne', 'deleteOne', 'deleteMany', 'bulkWrite'].forEach(op => schema.post(op, function () {
+    const nome = (this && (this.modelName || (this.model && this.model.modelName) || (this.constructor && this.constructor.modelName))) || '';
+    if (nome) invalidaElenchiDelModello(nome); else Object.keys(CACHE_ELENCHI).forEach(invalidaElenco);
+  }));
+});
+app.use((req, res, next) => {
+  const percorso = String(req.path || '').replace(/\/+$/, '');
+  if (req.method !== 'GET') {
+    Object.keys(CACHE_ELENCHI).forEach(p => {
+      if (percorso === p || percorso.startsWith(p + '/')) { invalidaElenco(p); res.on('finish', () => invalidaElenco(p)); }
+    });
+    return next();
+  }
+  if (!CACHE_ELENCHI[percorso] || Object.keys(req.query || {}).length) return next();
+  const gzipOk = /\bgzip\b/.test(String(req.headers['accept-encoding'] || ''));
+  const manda = (c) => {
+    res.set('Content-Type', 'application/json; charset=utf-8');
+    res.set('Vary', 'Accept-Encoding');
+    if (gzipOk) { res.set('Content-Encoding', 'gzip'); return res.status(200).send(c.gz); }
+    return res.status(200).send(c.json);
+  };
+  const c = _cacheElenchi[percorso];
+  if (c && Date.now() - c.quando < 10 * 60 * 1000) return manda(c);
+  const versione = _versioneElenchi[percorso] || 0;
+  const jsonOriginale = res.json.bind(res);
+  res.json = (corpo) => {
+    if (res.statusCode !== 200) return jsonOriginale(corpo);
+    try {
+      const json = Buffer.from(JSON.stringify(corpo));
+      const pronto = { json, gz: zlib.gzipSync(json), quando: Date.now() };
+      if (versione === (_versioneElenchi[percorso] || 0)) _cacheElenchi[percorso] = pronto;   // nel frattempo e' cambiato qualcosa: non la tengo
+      return manda(pronto);
+    } catch (e) { return jsonOriginale(corpo); }
+  };
+  next();
+});
+
 const mongoURI = process.env.MONGO_URI;
 if (!mongoURI) {
   console.error('ERRORE CRITICO: La variabile MONGO_URI non è configurata su Render!');
@@ -14846,4 +14902,15 @@ app.get('/scheda-cliente/:id', (req, res) => {
 });
 
 const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => console.log(`Server CRM completo e attivo sulla porta ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server CRM completo e attivo sulla porta ${PORT}`);
+  /* preparo subito le copie in memoria, una alla volta per non intasare il database */
+  setTimeout(async () => {
+    for (const p of Object.keys(CACHE_ELENCHI)) {
+      await new Promise(fatto => {
+        require('http').get({ host: '127.0.0.1', port: PORT, path: p, headers: { 'accept-encoding': 'gzip' } }, r => { r.resume(); r.on('end', fatto); })
+          .on('error', fatto).setTimeout(180000, fatto);
+      });
+    }
+  }, 3000);
+});
