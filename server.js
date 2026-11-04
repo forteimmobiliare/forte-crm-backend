@@ -12920,6 +12920,9 @@ app.get('/api/pubblico/incarico/:id/documento', async (req, res) => {
     const inc = await Incarico.findById(req.params.id);
     if (!inc) return res.status(404).send('<p style="font-family:sans-serif;padding:24px">Incarico non trovato.</p>');
     if (inc.docFirmaFile && await _inviaFileCaricato(inc, req, res)) return;
+    // niente file "da firmare" ma c'e' l'incarico allegato (PDF completo): faccio firmare quello,
+    // altrimenti il cliente riceverebbe il modello generato con i campi vuoti
+    if (inc.incaricoFirmato && await _inviaFileCaricato(inc, req, res, inc.incaricoFirmato, inc.incaricoFirmatoNome)) return;
     let agente = '';
     if (inc.consulente) {
       const c = await Consulente.findOne({ $or: [{ utente: inc.consulente }, { nomeCognome: inc.consulente }] }).catch(() => null);
@@ -13036,7 +13039,7 @@ async function _testoPagine(bytes) {
   try { await doc.destroy(); } catch (e) {}
   return out;
 }
-function _boxFirmaAngolo(page, f, PL, font, fontB) {
+function _boxFirmaAngolo(page, f, PL, font, fontB, titoloCliente) {
   const { rgb } = PL;
   const verde = rgb(0.05, 0.33, 0.17), bordo = rgb(0.07, 0.5, 0.23), sfondo = rgb(0.918, 0.98, 0.937);
   const x = 22, w = 300;
@@ -13049,7 +13052,7 @@ function _boxFirmaAngolo(page, f, PL, font, fontB) {
   const hasAg = !!(f.agente && f.agente.nome);
   // ACQUIRENTE (riquadro in basso)
   const yAcq = 104, hAcq = 48;
-  drawBox(yAcq, hAcq, 'FIRMA ACQUIRENTE (OTP)', [
+  drawBox(yAcq, hAcq, titoloCliente || 'FIRMA ACQUIRENTE (OTP)', [
     (f.nome || '') + (f.codiceFiscale ? '  CF ' + f.codiceFiscale : ''),
     (f.firmatoIl ? 'Data ' + new Date(f.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' }) : '') + (f.telefono ? '  Tel ' + f.telefono : '')
   ]);
@@ -13062,7 +13065,7 @@ function _boxFirmaAngolo(page, f, PL, font, fontB) {
     ]);
   }
 }
-async function _pdfFirmato(doc, tipoMime, bytes) {
+async function _pdfFirmato(doc, tipoMime, bytes, tipo) {
   if (!_PDFLIB) return null;
   const { PDFDocument, StandardFonts } = _PDFLIB;
   const f = doc.firma || {};
@@ -13082,8 +13085,13 @@ async function _pdfFirmato(doc, tipoMime, bytes) {
   try { testi = await _testoPagine(bytes); } catch (e) { testi = null; }
   const pages = pdf.getPages();
   let messe = 0;
-  const metti = (idx) => { if (idx >= 0 && pages[idx]) { try { _boxFirmaAngolo(pages[idx], f, _PDFLIB, font, fontB); messe++; } catch (e) {} } };
-  if (testi) {
+  const metti = (idx, titolo) => { if (idx >= 0 && pages[idx]) { try { _boxFirmaAngolo(pages[idx], f, _PDFLIB, font, fontB, titolo); messe++; } catch (e) {} } };
+  if (testi && tipo === 'incarico') {
+    // Incarico: riquadro sulla pagina "Firma parte venditrice" (l'ultima che la contiene)
+    let vIdx = -1;
+    testi.forEach(function (t, i) { if (t.indexOf('parte venditrice') !== -1 && t.indexOf('firma') !== -1) vIdx = i; });
+    metti(vIdx, 'FIRMA VENDITORE (OTP)');
+  } else if (testi) {
     // 1) Firma PROPOSTA: la pagina delle "clausole aggiuntive" (prima firma acquirente)
     const propIdx = testi.findIndex(function (t) { return t.indexOf('clausole aggiuntive') !== -1; });
     metti(propIdx);
@@ -13120,13 +13128,13 @@ async function _aggiungiPaginaFirma(pdf, f) {
     if (f.agente.firmatoIl) L('Data e ora: ' + new Date(f.agente.firmatoIl).toLocaleString('it-IT', { timeZone: 'Europe/Rome' }), false, 9.5);
   }
 }
-async function _inviaFileCaricato(doc, req, res) {
-  const data = String(doc.docFirmaFile || '');
+async function _inviaFileCaricato(doc, req, res, fileAlt, nomeAlt) {
+  const data = String(fileAlt || doc.docFirmaFile || '');
   const m = data.match(/^data:([^;]+);base64,(.*)$/);
   if (!m) return false;
   const tipoMime = m[1];
   const firmato = !!(doc.firma && doc.firma.stato === 'firmato');
-  const nomeBase = String(doc.docFirmaNome || 'documento').replace(/[^\w.\- ]+/g, '_');
+  const nomeBase = String((fileAlt ? nomeAlt : doc.docFirmaNome) || 'documento').replace(/[^\w.\- ]+/g, '_');
   // non firmato, oppure richiesta esplicita dell'originale: servo il file com'e'
   if (!firmato || req.query.raw === '1') {
     res.set('Content-Type', tipoMime);
@@ -13138,7 +13146,7 @@ async function _inviaFileCaricato(doc, req, res) {
   // firmato: scrivo la firma DENTRO al PDF (pagina di firma in coda)
   if (_PDFLIB) {
     try {
-      const firmatoBuf = await _pdfFirmato(doc, tipoMime, Buffer.from(m[2], 'base64'));
+      const firmatoBuf = await _pdfFirmato(doc, tipoMime, Buffer.from(m[2], 'base64'), (doc.constructor && doc.constructor.modelName === 'Incarico') ? 'incarico' : 'proposta');
       if (firmatoBuf) {
         res.set('Content-Type', 'application/pdf');
         res.set('Content-Disposition', 'inline; filename="' + nomeBase.replace(/\.pdf$/i, '') + '-firmato.pdf"');
