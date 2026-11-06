@@ -11238,8 +11238,15 @@ function telefonoWhatsapp(t) {
 /* Il messaggio che parte al cliente. Se c'e' un Evento Casa Forte ancora da venire
    si aggiunge il link per prenotare; se e' gia' passato ci si ferma alla
    domanda, che e' quello che si direbbe al telefono. */
+/* il nome come va scritto nel saluto: niente "(senza nome)", maiuscole giuste */
+function nomeNelSaluto(n) {
+  const t = String(n || '').trim();
+  if (!t || /^\(?senza nome\)?$/i.test(t)) return '';
+  return t.toLowerCase().replace(/(^|[\s'-])\S/g, x => x.toUpperCase());
+}
+
 function messaggioRichiestaWhatsapp(nomeCliente, nomeConsulente, inc, linkPrenota) {
-  const nome = String(nomeCliente || '').trim();
+  const nome = nomeNelSaluto(nomeCliente);
   let t = 'Buongiorno' + (nome ? ' ' + nome : '') + ', sono ' +
           (String(nomeConsulente || '').trim() || 'un consulente') + ' di Forte Immobiliare. ';
   t += 'Le scrivo perché ha mandato una richiesta per un nostro immobile';
@@ -11400,7 +11407,7 @@ function linkWhatsappConsulente(c) {
 }
 
 function messaggioRichiestaAltroConsulente(nomeCliente, cons, inc, linkPrenota) {
-  const nome = String(nomeCliente || '').trim();
+  const nome = nomeNelSaluto(nomeCliente);
   const chi = nomeBello(cons && cons.nomeCognome) || 'il consulente di riferimento';
   let t = 'Buongiorno' + (nome ? ' ' + nome : '') + ', sono Alessandro Forte di Forte Immobiliare. ' +
           'Le scrivo perché ha mandato una richiesta per un nostro immobile';
@@ -11439,6 +11446,11 @@ app.get('/api/whatsapp-richieste/coda', async (req, res) => {
       const fisso = /^39/.test(numero) && !/^393\d{8,9}$/.test(numero);   // un fisso su WhatsApp non c'e'
       if (!numero || numero.length < 10 || fisso || !cons || visti.has(numero)) continue;
       visti.add(numero);   // un cliente con piu' richieste: una alla volta
+      // doppione: lo stesso numero ha gia' una richiesta per lo stesso immobile andata avanti
+      const coda9 = numero.slice(-9);
+      const gia = await BancaDati.findOne({ _id: { $ne: r._id }, immobileFonteRichiesta: r.immobileFonteRichiesta || '',
+        statoAdvFix: { $nin: ['Da Fix', '', null] }, telefono: { $regex: coda9.split('').join('\\D*') + '$' } }).lean().catch(() => null);
+      if (gia) continue;
       const inc = r.immobileFonteRichiesta
         ? await Incarico.findOne({ idElemento: r.immobileFonteRichiesta }).lean().catch(() => null) : null;
       let linkPrenota = '';
