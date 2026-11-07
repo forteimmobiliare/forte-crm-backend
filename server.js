@@ -5526,9 +5526,10 @@ async function riconosciNumeroVoice(numero) {
 async function aggiornaRichiamateVoice() {
   const da = new Date(Date.now() - 7 * 86400000);
   const perse = await ChiamataVoice.find({ tipo: 'persa', richiamata: false, quando: { $gte: da } });
+  // Voice segna l'ora al minuto: una persa e la richiamata nello stesso minuto hanno la stessa ora
   for (const p of perse) {
     const id = p.numero ? { numero: p.numero } : { etichetta: p.etichetta };
-    const dopo = await ChiamataVoice.findOne({ ...id, tipo: { $in: ['uscita', 'arrivo'] }, quando: { $gt: p.quando } }).sort({ quando: 1 }).lean();
+    const dopo = await ChiamataVoice.findOne({ ...id, tipo: { $in: ['uscita', 'arrivo'] }, quando: { $gte: p.quando } }).sort({ quando: 1 }).lean();
     if (dopo) {
       p.richiamata = true; p.richiamataIl = dopo.quando; p.richiamataCome = dopo.tipo === 'uscita' ? 'noi' : 'lui';
       await p.save();
