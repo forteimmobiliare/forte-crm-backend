@@ -1317,6 +1317,58 @@ const IncaricoSchema = new mongoose.Schema({
      'sempre' = mostralo comunque online, 'mai' = tienilo fuori dalla vetrina. */
   pubblicaSito: { type: String, default: '' }
 }, { timestamps: true });
+/* 17 nov 2026 - TO DO AUTOMATICA DEGLI INCARICHI NUOVI (richiesta di Alessandro).
+   Quando nasce un incarico (dal CRM o dall'app) finiscono come attivita' nella To Do
+   (impegni del 121 in corso di ognuno; se non c'e' un 121 aperto nasce):
+   - al Broker: fare le foto;
+   - al consulente dell'incarico: check dei documenti necessari entro 15 giorni;
+   - al consulente, al Broker e ad Arianna: accesso agli atti entro 15 giorni.
+   Quando poi sull'incarico compaiono le foto, a Giuseppe: editing foto (una volta sola).
+   Vale solo per gli incarichi nati da oggi (todoAuto.creazione); l'import Excel massivo non conta. */
+IncaricoSchema.add({ todoAuto: { type: mongoose.Schema.Types.Mixed, default: {} } });
+const TODO_INC_BROKER = 'alessandro.forte', TODO_INC_EDITING = 'giuseppe.mazzeo', TODO_INC_BACKOFFICE = 'arianna.mazzeo';
+function todoIncDataTra(giorni) {
+  const d = new Date(oggiInItalia() + 'T12:00:00Z');
+  d.setUTCDate(d.getUTCDate() + giorni);
+  return d.toISOString().slice(0, 10);
+}
+async function todoIncImpegno(chi, cosa, entro, priorita, collegamento) {
+  if (!chi) return;
+  let r = await UnoAUno.findOne({ consulente: chi, stato: { $ne: 'Fatto' }, chiusoIl: { $in: ['', null] } }).sort({ data: -1 });
+  if (!r) r = new UnoAUno({ consulente: chi, data: oggiInItalia(), stato: 'Programmato', fattoDa: TODO_INC_BROKER });
+  r.impegni.push({ cosa, entro: entro || '', chi: '', fatto: false, fattoIl: '', feedback: '', assegnataIl: oggiInItalia(),
+    priorita: priorita || 'Normale', collegamento });
+  await r.save();
+}
+function todoIncNome(inc) { return [inc.idElemento, inc.nome].filter(Boolean).join(' '); }
+async function todoIncaricoNuovo(inc) {
+  const nome = todoIncNome(inc), coll = area => ({ area, id: String(inc._id), nome });
+  const entro = todoIncDataTra(15), cons = String(inc.consulente || '').trim();
+  await todoIncImpegno(TODO_INC_BROKER, 'Fare le foto: ' + nome, '', 'Alta', coll('Incarichi'));
+  if (cons) await todoIncImpegno(cons, 'Check dei documenti necessari: ' + nome, entro, 'Normale', coll('Documenti'));
+  for (const chi of [...new Set([cons, TODO_INC_BROKER, TODO_INC_BACKOFFICE].filter(Boolean))])
+    await todoIncImpegno(chi, 'Accesso agli atti: ' + nome, entro, 'Normale', coll('Documenti'));
+  await Incarico.updateOne({ _id: inc._id }, { $set: { 'todoAuto.creazione': oggiInItalia() } });
+}
+async function todoIncaricoFoto(id) {
+  const inc = await Incarico.findById(id, { idElemento: 1, nome: 1, foto: 1, fotoAllegati: 1, todoAuto: 1 }).lean();
+  const ta = (inc && inc.todoAuto) || {};
+  if (!inc || !ta.creazione || ta.editing) return;
+  if (!String(inc.foto || '').trim() && !(inc.fotoAllegati || []).length) return;
+  await Incarico.updateOne({ _id: id }, { $set: { 'todoAuto.editing': oggiInItalia() } });
+  await todoIncImpegno(TODO_INC_EDITING, 'Editing foto: ' + todoIncNome(inc), '', 'Alta',
+    { area: 'Incarichi', id: String(id), nome: todoIncNome(inc) });
+}
+IncaricoSchema.pre('save', function (next) { this.$locals.todoNuovo = this.isNew; next(); });
+IncaricoSchema.post('save', function (doc) {
+  if (doc.$locals && doc.$locals.todoNuovo) todoIncaricoNuovo(doc).catch(e => console.warn('To Do incarico nuovo:', e.message));
+});
+IncaricoSchema.post(['findOneAndUpdate', 'updateOne'], function () {
+  const u = this.getUpdate() || {}, s = u.$set || u;
+  const foto = ['foto', 'fotoAllegati'].some(k => k in s && (Array.isArray(s[k]) ? s[k].length : String(s[k] || '').trim()));
+  const id = (this.getQuery() || {})._id;
+  if (foto && id) todoIncaricoFoto(id).catch(e => console.warn('To Do editing foto:', e.message));
+});
 const Incarico = mongoose.model('Incarico', IncaricoSchema);
 
 /* ==========================================
