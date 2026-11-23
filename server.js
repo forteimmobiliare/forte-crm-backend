@@ -10137,11 +10137,26 @@ const _STATI_VOCE_NASCOSTI = ['Scaduto'];
 
 app.get('/api/voce/immobili', async (req, res) => {
   try {
-    const [incarichi, consulenti] = await Promise.all([
+    const [incarichi, consulenti, eventi] = await Promise.all([
       Incarico.find({ statoImmobile: { $nin: _STATI_VOCE_NASCOSTI } }).sort({ createdAt: -1 }).limit(400)
         .select('nome idElemento posizione comune via civico statoImmobile pubblicaSito tipologiaContratto prezzoIncarico contesto tipologiaUnita locali bagni piano mq ascensore box boxMq mqBox classeApe speseCondominiali occupazioneImmobile testoAnnuncio consulente'),
-      Consulente.find({}).select('nomeCognome telefono utente')
+      Consulente.find({}).select('nomeCognome telefono utente'),
+      OpenHouse.find({}).select('incaricoUfficio immobiliExtra data orario stato')
     ]);
+    /* prossimo Evento Casa Forte per immobile (anche quelli collegati all'evento) */
+    const oggiVoce = new Date().toISOString().slice(0, 10);
+    const eventoDi = {};
+    eventi.forEach(o => {
+      const data = String(o.data || '').slice(0, 10);
+      if (!data || data < oggiVoce || o.stato === 'Annullato') return;
+      rifImmobiliOH(o).forEach(rif => {
+        if (!eventoDi[rif] || data < eventoDi[rif].data) eventoDi[rif] = { data, orario: o.orario || '' };
+      });
+    });
+    const dataParlata = (iso) => {
+      const d = new Date(iso + 'T12:00:00');
+      return isNaN(d) ? iso : d.toLocaleDateString('it-IT', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Europe/Rome' });
+    };
     const cons = {};
     consulenti.forEach(c => { cons[String(c.utente || '').toLowerCase().trim()] = { nome: c.nomeCognome || '', telefono: c.telefono || '' }; });
 
@@ -10151,12 +10166,19 @@ app.get('/api/voce/immobili', async (req, res) => {
       const disponibilita = _STATI_VOCE_VENDUTO.includes(stato) ? 'venduto'
         : _STATI_VOCE_TRATTATIVA.includes(stato) ? 'in trattativa (c\'e\' gia\' una proposta)'
         : 'disponibile';
+      /* fase dell'annuncio, come la deve dire Giulia */
+      const fase = disponibilita !== 'disponibile' ? 'non disponibile'
+        : stato === 'On Line' ? 'in pubblicita'
+        : 'in preparazione (annuncio non ancora completo)';
+      const ev = eventoDi[String(inc.idElemento || '').trim()] || null;
       const prezzoNum = Number(String(inc.prezzoIncarico || '').replace(/[^0-9]/g, '')) || 0;
       const c = cons[String(inc.consulente || '').toLowerCase().trim()] || {};
       return {
         codice: String(inc.idElemento || '').trim(),
         comune: a.comune, via: String(a.via || '').replace(/[\s,]+(n\.?\s*)?\d+[a-zA-Z]?(\/[a-zA-Z0-9]+)?\s*$/i, '').trim(),   /* niente civico: lo da' il consulente */
-        disponibilita,
+        disponibilita, fase,
+        eventoCasaForte: ev && disponibilita === 'disponibile'
+          ? dataParlata(ev.data) + (ev.orario ? ', ' + ev.orario : '') : '',
         contratto: inc.tipologiaContratto || 'Vendita',
         prezzo: prezzoNum ? prezzoNum.toLocaleString('it-IT') + ' euro' : '',
         tipologia: [inc.tipologiaUnita, inc.contesto ? 'in ' + inc.contesto : ''].filter(Boolean).join(' '),
@@ -10188,7 +10210,7 @@ app.get('/api/voce/immobili', async (req, res) => {
     const corto = !q;
     const fuori = trovati.slice(0, corto ? 60 : 5).map(t => {
       const o = Object.assign({}, t); delete o._cerca;
-      if (corto) return { codice: o.codice, comune: o.comune, via: o.via, prezzo: o.prezzo, tipologia: o.tipologia, locali: o.locali, mq: o.mq, contratto: o.contratto };
+      if (corto) return { codice: o.codice, comune: o.comune, via: o.via, prezzo: o.prezzo, tipologia: o.tipologia, locali: o.locali, mq: o.mq, contratto: o.contratto, fase: o.fase, eventoCasaForte: o.eventoCasaForte };
       return o;
     });
     res.status(200).json({
@@ -10248,10 +10270,22 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
     }
 
     const motivo = String(dati.motivo || '').toLowerCase();
-    const compra = /acquist|compra|affitt|cerca/.test(motivo);
     const impostazioni = (await impostazioniLead().catch(() => null)) || {};
     const destinazione = await aChiVa(dati.immobile_codice || '', impostazioni,
       [dati.immobile_codice, dati.immobile_indirizzo, riassunto].filter(Boolean).join('\n'));
+    /* chi chiama per un annuncio e' un acquirente anche se non lo dice: va in
+       Banca Dati e la richiesta nasce "specifica" sull'immobile */
+    const perImmobile = !!(destinazione && destinazione.riconosciuto && destinazione.incaricoId) &&
+      !/vend|valut|propriet/.test(motivo);
+    const compra = perImmobile || /acquist|compra|affitt|cerca|annunc|immobile|informazion|visita/.test(motivo);
+    let indirizzoVoce = '';
+    if (perImmobile) {
+      const incV = await Incarico.findById(destinazione.incaricoId).select('idElemento nome posizione comune via civico').catch(() => null);
+      if (incV) {
+        const a = indirizzoIncarico(incV);
+        indirizzoVoce = [incV.idElemento, a.comune, [a.via, a.civico].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
+      }
+    }
 
     const minuti = durata ? (durata < 60 ? durata + ' sec' : Math.round(durata / 60) + ' min') : '';
     const righe = [
@@ -10275,11 +10309,12 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
       nome: dati.nome || ('Chiamata ' + telefono),
       telefonoCliente: telefono,
       messaggioCliente: righe.join('\n'),
-      tipoRichiesta: 'Telefonata AI',
+      tipoRichiesta: perImmobile ? 'Chiamata Richiesta Specifica' : 'Telefonata AI',
       fonteRichiesta: 'Telefono AI',
       stato: 'Da Fare',
       consulente: destinazione.consulente,
       riferimentoImmobile: destinazione.codice || '',
+      indirizzoImmobile: indirizzoVoce,
       incaricoCollegatoId: destinazione.incaricoId || '',
       portaleOrigine: 'Giulia AI',
       /* l'avviso lo mando io qui sotto, anche senza immobile (un proprietario
