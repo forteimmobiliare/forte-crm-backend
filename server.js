@@ -10355,7 +10355,7 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
       dati.quando_richiamare ? '☎️ Richiamare: ' + dati.quando_richiamare : '',
       _siVoce(dati.urgente) ? '⚠️ URGENTE (cliente insoddisfatto)' : '',
       _siVoce(dati.non_contattare) ? '⛔ Chiede di non essere più contattato' : '',
-      dati.anteprima_consenso ? 'Servizio Anteprima: ' + dati.anteprima_consenso : '',
+      dati.anteprima_consenso ? 'Ricontatto per altri immobili: ' + dati.anteprima_consenso : '',
       dati.note ? 'Note: ' + dati.note : ''
     ].filter(Boolean);
 
