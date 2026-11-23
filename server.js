@@ -10346,8 +10346,19 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
     if (!compra && !vecchio) {
       if (nuovo) await BancaDati.deleteOne({ _id: nuovo._id }).catch(() => {});
     } else {
-      const scheda = vecchio || nuovo || await creaBancaDatiDaCentralino(riga);
-      if (vecchio && nuovo) await BancaDati.deleteOne({ _id: nuovo._id }).catch(() => {});
+      /* chi compra ha la SUA scheda per questa richiesta (nome detto a Giulia,
+         immobile giusto): non va appoggiato su una vecchia scheda con lo
+         stesso numero, che puo' essere di un'altra richiesta o una prova.
+         La vecchia scheda si aggiorna solo per chi non compra. */
+      let scheda;
+      if (compra) {
+        scheda = nuovo || await creaBancaDatiDaCentralino(riga);
+        if (scheda && dati.nome) scheda.nomeCognome = dati.nome;
+        if (scheda && destinazione.codice) scheda.immobileFonteRichiesta = destinazione.codice;
+      } else {
+        scheda = vecchio;
+        if (nuovo) await BancaDati.deleteOne({ _id: nuovo._id }).catch(() => {});
+      }
       if (scheda) {
         const oggi = new Date().toISOString().slice(0, 10);
         if (compra) {
