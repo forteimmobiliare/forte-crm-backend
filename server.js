@@ -10122,6 +10122,83 @@ function datiRaccoltiDaGiulia(analisi) {
 
 const _siVoce = (v) => /^(s[iì]|yes|true|vero)$/i.test(String(v || '').trim());
 
+/* ==========================================
+   GIULIA (agente vocale): cerca gli annunci durante la telefonata.
+   GET /api/voce/immobili?q=ferno marconi  (oppure q=IF-142)
+   Solo dati pubblici (quelli che stanno gia' sui portali): niente
+   venditori, provvigioni, valutazioni o dati catastali.
+   Senza q restituisce l'elenco corto di tutto quello in vendita.
+========================================== */
+const _normVoce = (s) => String(s || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .replace(/[^a-z0-9]+/g, ' ').trim();
+const _STATI_VOCE_TRATTATIVA = ['Vincolato', 'Proposta'];
+const _STATI_VOCE_VENDUTO = ['Rogitato', 'Prel Ok', 'Da Fare Prel'];
+const _STATI_VOCE_NASCOSTI = ['Scaduto'];
+
+app.get('/api/voce/immobili', async (req, res) => {
+  try {
+    const [incarichi, consulenti] = await Promise.all([
+      Incarico.find({ statoImmobile: { $nin: _STATI_VOCE_NASCOSTI } }).sort({ createdAt: -1 }).limit(400)
+        .select('nome idElemento posizione comune via civico statoImmobile pubblicaSito tipologiaContratto prezzoIncarico contesto tipologiaUnita locali bagni piano mq ascensore box boxMq mqBox classeApe speseCondominiali occupazioneImmobile testoAnnuncio consulente'),
+      Consulente.find({}).select('nomeCognome telefono utente')
+    ]);
+    const cons = {};
+    consulenti.forEach(c => { cons[String(c.utente || '').toLowerCase().trim()] = { nome: c.nomeCognome || '', telefono: c.telefono || '' }; });
+
+    const tutti = incarichi.filter(inc => String(inc.pubblicaSito || '').trim().toLowerCase() !== 'mai').map(inc => {
+      const a = indirizzoIncarico(inc);
+      const stato = String(inc.statoImmobile || '').trim();
+      const disponibilita = _STATI_VOCE_VENDUTO.includes(stato) ? 'venduto'
+        : _STATI_VOCE_TRATTATIVA.includes(stato) ? 'in trattativa (c\'e\' gia\' una proposta)'
+        : 'disponibile';
+      const prezzoNum = Number(String(inc.prezzoIncarico || '').replace(/[^0-9]/g, '')) || 0;
+      const c = cons[String(inc.consulente || '').toLowerCase().trim()] || {};
+      return {
+        codice: String(inc.idElemento || '').trim(),
+        comune: a.comune, via: [a.via, a.civico].filter(Boolean).join(' '),
+        disponibilita,
+        contratto: inc.tipologiaContratto || 'Vendita',
+        prezzo: prezzoNum ? prezzoNum.toLocaleString('it-IT') + ' euro' : '',
+        tipologia: [inc.tipologiaUnita, inc.contesto ? 'in ' + inc.contesto : ''].filter(Boolean).join(' '),
+        locali: inc.locali || '', bagni: inc.bagni || '', piano: inc.piano || '', mq: inc.mq || '',
+        ascensore: inc.ascensore || '', box: inc.box || '', mqBox: inc.boxMq || inc.mqBox || '',
+        classeEnergetica: inc.classeApe || '', speseCondominialiMensili: inc.speseCondominiali || '',
+        stato_occupazione: inc.occupazioneImmobile || '',
+        descrizione: String(inc.testoAnnuncio || '').replace(/\s+/g, ' ').trim().slice(0, 900),
+        consulente: c.nome || '', telefonoConsulente: c.telefono || '',
+        _cerca: _normVoce([inc.idElemento, inc.nome, inc.posizione, a.comune, a.via, a.civico].join(' '))
+      };
+    });
+
+    const q = _normVoce(req.query.q || '');
+    let trovati = tutti;
+    if (q) {
+      const parole = q.split(' ').filter(p => p.length > 1 && !['via', 'viale', 'piazza', 'corso', 'di', 'in', 'a', 'la', 'il', 'casa', 'appartamento'].includes(p));
+      const cod = q.match(/\bif\s*(\d+)\b/);
+      if (cod) trovati = tutti.filter(t => _normVoce(t.codice).replace(/\s/g, '') === 'if' + cod[1]);
+      else {
+        const punti = tutti.map(t => ({ t, p: parole.filter(w => t._cerca.includes(w)).length }));
+        const max = Math.max(0, ...punti.map(x => x.p));
+        trovati = max ? punti.filter(x => x.p === max).map(x => x.t) : [];
+      }
+    } else {
+      trovati = tutti.filter(t => t.disponibilita === 'disponibile');
+    }
+
+    const corto = !q;
+    const fuori = trovati.slice(0, corto ? 60 : 5).map(t => {
+      const o = Object.assign({}, t); delete o._cerca;
+      if (corto) return { codice: o.codice, comune: o.comune, via: o.via, prezzo: o.prezzo, tipologia: o.tipologia, locali: o.locali, mq: o.mq, contratto: o.contratto };
+      return o;
+    });
+    res.status(200).json({
+      trovati: fuori.length,
+      nota: q ? (fuori.length ? 'Rispondi solo con questi dati. Indirizzo esatto, visite e trattative: li gestisce il consulente, prendi i dati del cliente.' : 'Nessun immobile corrisponde: chiedi comune e via, oppure prendi i dati e fai richiamare.') : 'Elenco degli immobili disponibili.',
+      immobili: fuori
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/api/voce/fine-chiamata', async (req, res) => {
   if (!process.env.ELEVENLABS_WEBHOOK_SECRET) {
     console.error('Chiamata AI: manca ELEVENLABS_WEBHOOK_SECRET su Render');
