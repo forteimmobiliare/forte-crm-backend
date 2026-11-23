@@ -10155,7 +10155,7 @@ app.get('/api/voce/immobili', async (req, res) => {
       const c = cons[String(inc.consulente || '').toLowerCase().trim()] || {};
       return {
         codice: String(inc.idElemento || '').trim(),
-        comune: a.comune, via: [a.via, a.civico].filter(Boolean).join(' '),
+        comune: a.comune, via: String(a.via || '').replace(/[\s,]+(n\.?\s*)?\d+[a-zA-Z]?(\/[a-zA-Z0-9]+)?\s*$/i, '').trim(),   /* niente civico: lo da' il consulente */
         disponibilita,
         contratto: inc.tipologiaContratto || 'Vendita',
         prezzo: prezzoNum ? prezzoNum.toLocaleString('it-IT') + ' euro' : '',
