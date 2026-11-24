@@ -10123,6 +10123,47 @@ function datiRaccoltiDaGiulia(analisi) {
   return fuori;
 }
 
+/* ElevenLabs scrive il riassunto in inglese: lo passo a Gemini per averlo in
+   italiano. Se Gemini non risponde tengo quello originale. */
+function _sembraInglese(t) {
+  const s = ' ' + String(t || '').toLowerCase() + ' ';
+  return (s.match(/ (the|caller|customer|agent|user|wants|asked|about|with|and|is|was|for|their|they|interested) /g) || []).length >= 3;
+}
+async function riassuntoInItaliano(testo) {
+  const t = String(testo || '').trim();
+  if (!t || !_sembraInglese(t) || !GEMINI_API_KEY) return t;
+  try {
+    const it = await testoDaGemini('Traduci in italiano naturale questo riassunto di una telefonata tra Giulia (assistente vocale di ' +
+      'Immobiliare Forte) e un cliente. Chiama "Giulia" l\'agente e "il cliente" chi chiama. Lascia invariati nomi, numeri, ' +
+      'indirizzi e codici (es. IF-14). Rispondi SOLO con la traduzione, senza virgolette né commenti.\n\n' + t);
+    return (it || '').trim() || t;
+  } catch (e) { return t; }
+}
+
+/* una volta: traduce i riassunti gia' salvati (scheda Giulia + riga del Registro) */
+app.post('/api/voce/traduci-riassunti', async (req, res) => {
+  try {
+    const tutte = await ChiamataAi.find({ riassunto: { $nin: ['', null] } }).select('riassunto centralinoId');
+    let fatte = 0;
+    for (const c of tutte) {
+      if (!_sembraInglese(c.riassunto)) continue;
+      const it = await riassuntoInItaliano(c.riassunto);
+      if (!it || it === c.riassunto) continue;
+      if (c.centralinoId) {
+        const r = await Centralino.findById(c.centralinoId).select('messaggioCliente').catch(() => null);
+        if (r && r.messaggioCliente && r.messaggioCliente.includes(c.riassunto)) {
+          r.messaggioCliente = r.messaggioCliente.split(c.riassunto).join(it);
+          await r.save().catch(() => {});
+        }
+      }
+      c.riassunto = it;
+      await c.save().catch(() => {});
+      fatte++;
+    }
+    res.status(200).json({ controllate: tutte.length, tradotte: fatte });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 const _siVoce = (v) => /^(s[iì]|yes|true|vero)$/i.test(String(v || '').trim());
 
 /* ==========================================
@@ -10300,7 +10341,7 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
       variabili.system__caller_id || '').trim();
     const analisi = d.analysis || {};
     const dati = datiRaccoltiDaGiulia(analisi);
-    const riassunto = String(analisi.transcript_summary || '').trim();
+    const riassunto = await riassuntoInItaliano(String(analisi.transcript_summary || '').trim());
     const durata = Math.round(Number(meta.call_duration_secs) || 0);
     const trascrizione = (Array.isArray(d.transcript) ? d.transcript : [])
       .filter(t => t && t.message)
