@@ -12733,7 +12733,7 @@ const STATI_CHIUSI_RICHIESTA = ['Archiviato', 'Non Interessa', 'Immobile in trat
 const GIULIA_AGENTE = 'agent_9601m5wncp80en3t646gz9a8p4ah';
 const GIULIA_NUMERO_ID = 'phnum_9901m83xmeexee4spnwc4yww10ty';
 const _ultimeRichiamate = {};
-async function salutoRichiamata(telefono) {
+async function salutoRichiamata(telefono, rifScelto) {
   const cifre = String(telefono || '').replace(/\D/g, '').slice(-9);
   if (cifre.length < 8) return null;
   const re = new RegExp(cifre.split('').join('[\\s.\\-]*') + '$');
@@ -12746,11 +12746,12 @@ async function salutoRichiamata(telefono) {
   const b = bd.find(x => x.nomeCognome && !/senza nome|^chiamata/i.test(x.nomeCognome));
   if (b) nome = b.nomeCognome;
   else { const c = cen.find(x => x.nome && !/^chiamata|senza nome/i.test(x.nome)); if (c) nome = c.nome; }
-  const rif = (cen.find(x => x.riferimentoImmobile) || {}).riferimentoImmobile || (bd.find(x => x.immobileFonteRichiesta) || {}).immobileFonteRichiesta || '';
+  const rif = String(rifScelto || '').trim().toUpperCase() || (cen.find(x => x.riferimentoImmobile) || {}).riferimentoImmobile || (bd.find(x => x.immobileFonteRichiesta) || {}).immobileFonteRichiesta || '';
   let immobile = null;
   if (rif) {
     const inc = await Incarico.findOne({ idElemento: rif }).lean().catch(() => null);
-    if (inc) { const a = indirizzoIncarico(inc); immobile = { codice: rif, comune: a.comune || '', via: a.via || '' }; }
+    const bel = t => String(t || '').toLowerCase().replace(/(^|[\s'-])(\p{L})/gu, (m, p, c) => p + c.toUpperCase());
+    if (inc) { const a = indirizzoIncarico(inc); immobile = { codice: rif, comune: bel(a.comune), via: bel(a.via) }; }
     else immobile = { codice: rif, comune: '', via: '' };
   }
   const primo = nome ? String(nome).trim().split(/\s+/)[0] : '';
@@ -12768,7 +12769,7 @@ function testoSalutoRichiamata(info) {
 }
 app.get('/api/voce/richiama/anteprima', async (req, res) => {
   try {
-    const info = await salutoRichiamata(req.query.telefono);
+    const info = await salutoRichiamata(req.query.telefono, req.query.immobile);
     res.status(200).json({ info, saluto: testoSalutoRichiamata(info) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -12784,7 +12785,7 @@ app.post('/api/voce/richiama', async (req, res) => {
     const cifre = tel.replace(/\D/g, '').slice(-9);
     if (_ultimeRichiamate[cifre] && Date.now() - _ultimeRichiamate[cifre] < 2 * 3600000 && !(req.body && req.body.forza))
       return res.status(429).json({ error: 'Questo numero è già stato richiamato nelle ultime 2 ore' });
-    const info = await salutoRichiamata(tel);
+    const info = await salutoRichiamata(tel, req.body && req.body.immobile);
     if (!info || !info.trovato) return res.status(404).json({ error: 'Numero non presente nel CRM degli ultimi 30 giorni' });
     const saluto = testoSalutoRichiamata(info);
     const corpo = JSON.stringify({
