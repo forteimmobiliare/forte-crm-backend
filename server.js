@@ -12759,7 +12759,8 @@ async function salutoRichiamata(telefono, rifScelto) {
   return { trovato: true, nome, nomeSaluto: bello, immobile };
 }
 function testoSalutoRichiamata(info) {
-  const ciao = 'Buongiorno' + (info && info.nomeSaluto ? ' ' + info.nomeSaluto : '') + ', sono Giulia, l\'assistente virtuale di Immobiliare Forte. ';
+  const oraRoma = Number(new Date().toLocaleString('en-US', { timeZone: 'Europe/Rome', hour: '2-digit', hour12: false }));
+  const ciao = (oraRoma >= 17 ? 'Buonasera' : 'Buongiorno') + (info && info.nomeSaluto ? ' ' + info.nomeSaluto : '') + ', sono Giulia, l\'assistente virtuale di Immobiliare Forte. ';
   if (info && info.immobile && (info.immobile.comune || info.immobile.via)) {
     const dove = [info.immobile.via, info.immobile.comune].filter(Boolean).join(' a ');
     return ciao + 'La richiamo perché abbiamo visto una sua chiamata per l\'immobile in ' + dove +
