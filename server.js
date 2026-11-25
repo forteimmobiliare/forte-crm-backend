@@ -2828,7 +2828,7 @@ app.put('/api/centralino/:id', async (req, res) => {
 
     if (dice(corpo.tgConsInviato) && !aggiornato.tgInviatoIl) {
       /* messo a mano su "Inviato": parte comunque, l'hai deciso tu */
-      esitoInvio = await mandaAvvisoTelegram(aggiornato, true);
+      esitoInvio = await mandaAvvisoTelegram(aggiornato, true, { manuale: true });
     } else if (dice(corpo.mexClienteInviato) && !aggiornato.mexInviatoIl) {
       esitoInvio = await mandaMessaggioAlCliente(aggiornato);
     } else if (!aggiornato.tgInviatoIl && aggiornato.tgConsInviato !== '✅ Inviato' &&
@@ -8052,6 +8052,21 @@ function pesoRichiesta(st) {
   return 1;
 }
 const NOMI_VUOTI = ['', '(senza nome)', 'contatto', 'acquirente'];
+/* "Chiamata +39..." e' il segnaposto che mette Giulia quando non sa il nome:
+   va trattato come vuoto, se no nell'unione vince sul nome vero */
+const nomeVuotoRichiesta = n => { const t = String(n || '').trim().toLowerCase(); return NOMI_VUOTI.includes(t) || /^chiamata\b/.test(t); };
+/* Il nome gia' noto nel CRM per questo telefono (Banca Dati, poi Registro) */
+async function nomeNotoDaTelefono(telefono) {
+  const cifre = String(telefono || '').replace(/\D/g, '').slice(-9);
+  if (cifre.length < 8) return '';
+  const re = new RegExp(cifre.split('').join('[\\s.\\-]*') + '$');
+  const bd = await BancaDati.find({ telefono: re }, { nomeCognome: 1 }).sort({ updatedAt: -1 }).limit(20).lean().catch(() => []);
+  const b = bd.find(x => !nomeVuotoRichiesta(x.nomeCognome));
+  if (b) return String(b.nomeCognome).trim();
+  const ce = await Centralino.find({ telefonoCliente: re }, { nome: 1 }).sort({ createdAt: -1 }).limit(20).lean().catch(() => []);
+  const c = ce.find(x => !nomeVuotoRichiesta(x.nome));
+  return c ? String(c.nome).trim() : '';
+}
 async function unisciRichiesteDoppie(gruppo) {
   const pieni = r => Object.keys(BancaDatiSchema.paths).filter(k => { const v = r[k]; return Array.isArray(v) ? v.length : (v !== '' && v != null && v !== false); }).length;
   gruppo.sort((x, y) => (pesoRichiesta(y.statoAdvFix) - pesoRichiesta(x.statoAdvFix)) || (pieni(y) - pieni(x)) || (new Date(x.createdAt) - new Date(y.createdAt)));
@@ -8064,7 +8079,7 @@ async function unisciRichiesteDoppie(gruppo) {
       const pieno = Array.isArray(suo) ? suo.length : (suo !== '' && suo != null);
       if (vuoto && pieno) tieni[k] = suo;
     });
-    if (NOMI_VUOTI.includes(String(tieni.nomeCognome || '').trim().toLowerCase()) && !NOMI_VUOTI.includes(String(r.nomeCognome || '').trim().toLowerCase())) tieni.nomeCognome = r.nomeCognome;
+    if (nomeVuotoRichiesta(tieni.nomeCognome) && !nomeVuotoRichiesta(r.nomeCognome)) tieni.nomeCognome = r.nomeCognome;
     const fa = String(tieni.feedbackContatto || '').trim(), fb = String(r.feedbackContatto || '').trim();
     if (fb && fa.indexOf(fb) === -1) tieni.feedbackContatto = fa ? (fa + ' · ' + fb) : fb;
     if (String(r.dataUltimoContatto || '') > String(tieni.dataUltimoContatto || '')) tieni.dataUltimoContatto = r.dataUltimoContatto;
@@ -10400,8 +10415,9 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
       dati.note ? 'Note: ' + dati.note : ''
     ].filter(Boolean);
 
+    const nomeNoto = dati.nome ? '' : await nomeNotoDaTelefono(telefono);
     const riga = await Centralino.create({
-      nome: dati.nome || ('Chiamata ' + telefono),
+      nome: dati.nome || nomeNoto || ('Chiamata ' + telefono),
       telefonoCliente: telefono,
       messaggioCliente: righe.join('\n'),
       tipoRichiesta: perImmobile ? 'Chiamata Richiesta Specifica' : 'Telefonata AI',
@@ -10447,8 +10463,22 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
          La vecchia scheda si aggiorna solo per chi non compra. */
       let scheda;
       if (compra) {
-        scheda = nuovo || await creaBancaDatiDaCentralino(riga);
+        /* stessa persona che richiama per lo stesso immobile: e' la stessa
+           richiesta, aggiorno la sua scheda invece di aprirne un'altra */
+        const stessa = (cifre.length >= 8 && destinazione.codice)
+          ? await BancaDati.findOne({
+              telefono: new RegExp(cifre.split('').join('[\\s.\\-]*') + '$'),
+              immobileFonteRichiesta: destinazione.codice,
+              statoAdvFix: { $ne: 'Archiviato' },
+              ...(nuovo ? { _id: { $ne: nuovo._id } } : {})
+            }).sort({ updatedAt: -1 }).catch(() => null)
+          : null;
+        if (stessa) {
+          if (nuovo) await BancaDati.deleteOne({ _id: nuovo._id }).catch(() => {});
+          scheda = stessa;
+        } else scheda = nuovo || await creaBancaDatiDaCentralino(riga);
         if (scheda && dati.nome) scheda.nomeCognome = dati.nome;
+        else if (scheda && nomeNoto && nomeVuotoRichiesta(scheda.nomeCognome)) scheda.nomeCognome = nomeNoto;
         if (scheda && destinazione.codice) scheda.immobileFonteRichiesta = destinazione.codice;
       } else {
         scheda = vecchio;
@@ -11687,7 +11717,7 @@ async function _creaBancaDatiDaCentralino(riga) {
   }).catch(e => { console.error('creaBancaDatiDaCentralino:', e.message); return null; });
 }
 
-async function mandaAvvisoTelegram(riga, forzato) {
+async function mandaAvvisoTelegram(riga, forzato, opzioni) {
   const passi = [];
   try {
     /* prima di tutto: la richiesta e' completa? Se no non parte niente —
@@ -11737,6 +11767,32 @@ async function mandaAvvisoTelegram(riga, forzato) {
     if (!destinatario.idTelegram) {
       throw new Error((destinatario.nomeCognome || destinatario.utente) +
         ' non ha la casella Telegram nella sua scheda');
+    }
+
+    /* Lo stesso cliente gia' segnalato a questo consulente negli ultimi 30
+       giorni: niente secondo avviso (richiama, scrive dal portale, Giulia...).
+       Passa lo stesso se lo mandi a mano dal CRM o se Giulia lo segna urgente. */
+    const manuale = !!(opzioni && opzioni.manuale);
+    const urgente = /URGENTE/.test(String(riga.messaggioCliente || ''));
+    const cifreTel = String(riga.telefonoCliente || '').replace(/\D/g, '').slice(-9);
+    if (!manuale && !urgente && cifreTel.length >= 8) {
+      const chi = [destinatario.utente, riga.consulente].filter(Boolean);
+      const gia = await Centralino.findOne({
+        _id: { $ne: riga._id },
+        telefonoCliente: new RegExp(cifreTel.split('').join('[\\s.\\-]*') + '$'),
+        consulente: { $in: chi },
+        tgInviatoIl: { $gte: new Date(Date.now() - 30 * 86400000) }
+      }).sort({ tgInviatoIl: -1 }).lean().catch(() => null);
+      if (gia) {
+        const quando = new Date(gia.tgInviatoIl).toLocaleDateString('it-IT', { timeZone: 'Europe/Rome' });
+        riga.tgConsInviato = '⏭ Già avvisato il ' + quando;
+        if (riga.stato !== 'Completo') riga.stato = 'Solo Consulente';
+        await riga.save().catch(() => {});
+        try { await creaBancaDatiDaCentralino(riga); } catch (e) {}
+        await segnaNelDiario('telegram', 'saltato', 'avviso già mandato',
+          (destinatario.nomeCognome || destinatario.utente) + ' era già stato avvisato il ' + quando + ' per questo numero', riga.nome || '');
+        return { fatto: false, giaAvvisato: true, a: destinatario.nomeCognome || destinatario.utente, passi };
+      }
     }
 
     /* il testo: quello dello scenario se c'e', altrimenti uno di riserva.
