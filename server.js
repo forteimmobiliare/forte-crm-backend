@@ -18177,6 +18177,20 @@ const RV = (() => {
   const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   const t = (x, y, s, size = 11, fill = PET, anchor = 'start', w = 700) =>
     `<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" ${F} font-size="${size}" fill="${fill}" text-anchor="${anchor}" font-weight="${w}">${s}</text>`;
+  let GID = 0;
+  const defs = (k, colArea) => `<defs><linearGradient id="gp${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b6479"/><stop offset="1" stop-color="${PET}"/></linearGradient>`
+    + `<linearGradient id="go${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#e6d2a4"/><stop offset="1" stop-color="${ORO2}"/></linearGradient>`
+    + `<linearGradient id="gh${k}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${PET}"/><stop offset="1" stop-color="#2a7489"/></linearGradient>`
+    + `<linearGradient id="gho${k}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${ORO2}"/><stop offset="1" stop-color="#e6d2a4"/></linearGradient>`
+    + `<linearGradient id="ga${k}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${colArea || PET}" stop-opacity=".26"/><stop offset="1" stop-color="${colArea || PET}" stop-opacity="0"/></linearGradient>`
+    + `<filter id="sh${k}" x="-20%" y="-30%" width="140%" height="180%"><feDropShadow dx="0" dy="1.5" stdDeviation="1.6" flood-color="#0B3B4A" flood-opacity=".22"/></filter></defs>`;
+  const pill = (x, y, testo, col, k, anchor = 'start') => {
+    const w = 10 + String(testo).replace(/<[^>]+>/g, '').length * 6.6;
+    let x0 = anchor === 'end' ? x - w : anchor === 'middle' ? x - w / 2 : x;
+    if (x0 + w > 698) { x0 = 698 - w; y -= 17; }
+    if (x0 < 2) x0 = 2;
+    return `<rect x="${x0.toFixed(1)}" y="${(y - 13).toFixed(1)}" width="${w.toFixed(1)}" height="19" rx="9.5" fill="${col}" filter="url(#sh${k})"/>` + t(x0 + w / 2, y + 0.5, testo, 10.5, '#fff', 'middle', 800);
+  };
   const svg = (h, body) => `<svg viewBox="0 0 700 ${Math.round(h)}" xmlns="http://www.w3.org/2000/svg" role="img" width="100%">\n${body.join('\n')}\n</svg>`;
 
   function scala(min, max, passi = 5) {
@@ -18192,7 +18206,8 @@ const RV = (() => {
     const N = xlab.length;
     const X = i => L + i * (R - L) / Math.max(1, N - 1);
     const Y = v => B - (v - ymin) / (ymax - ymin) * (B - T);
-    const s = [];
+    const k = ++GID;
+    const s = [defs(k, series[0] && series[0][2])];
     if (o.band) {
       const [y1, y2, lab] = o.band;
       const a = Math.max(ymin, Math.min(ymax, y1)), b = Math.max(ymin, Math.min(ymax, y2));
@@ -18209,15 +18224,16 @@ const RV = (() => {
       s.push(t(X(i), B + 17, lab, 10, MUT, 'middle', 600));
     });
     let lx = L;
-    series.forEach(([nome, vals, col, sw, dash]) => {
+    series.forEach(([nome, vals, col, sw, dash], si) => {
       const pts = vals.map((v, i) => v == null ? null : [X(i), Y(v)]).filter(Boolean);
       if (!pts.length) return;
       const da = dash ? ' stroke-dasharray="6 4"' : '';
+      if (si === 0 && o.area !== false && pts.length > 1) s.push(`<path d="M${pts[0][0].toFixed(1)},${B} L${pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L')} L${pts[pts.length - 1][0].toFixed(1)},${B} Z" fill="url(#ga${k})"/>`);
       s.push(`<path d="M${pts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join(' L')}" fill="none" stroke="${col}" stroke-width="${sw}" stroke-linejoin="round" stroke-linecap="round"${da}/>`);
       const [x, y] = pts[pts.length - 1];
       const ult = vals.filter(v => v != null).slice(-1)[0];
-      s.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${col}"/>`);
-      s.push(t(x + 8, y + 4, yfmt(ult), 11, col, 'start', 800));
+      s.push(`<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="7" fill="${col}" fill-opacity=".18"/><circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="4" fill="${col}" stroke="#fff" stroke-width="1.5"/>`);
+      s.push(pill(x + 9, y + 4, yfmt(ult), col, k));
       if (legenda) {
         s.push(`<line x1="${lx}" y1="14" x2="${lx + 18}" y2="14" stroke="${col}" stroke-width="3"${da}/>`);
         s.push(t(lx + 24, 18, esc(nome), 11, TXT, 'start', 700));
@@ -18232,11 +18248,12 @@ const RV = (() => {
     const fmt = o.fmt || (v => n(v)), lw = o.lw || 190, hr = o.hRiga || 34;
     const x0 = lw, x1 = 640;
     const X = v => x0 + Math.max(0, v) / vmax * (x1 - x0);
-    const s = [];
+    const k = ++GID;
+    const s = [defs(k)];
     items.forEach(([lab, sub, v, hi], i) => {
       const y = 8 + i * hr;
-      s.push(`<rect x="${x0}" y="${y}" width="${x1 - x0}" height="20" fill="${TILE}" rx="4"/>`);
-      s.push(`<rect x="${x0}" y="${y}" width="${Math.max(3, X(v) - x0).toFixed(1)}" height="20" fill="${hi ? ORO : PET}" rx="4"/>`);
+      s.push(`<rect x="${x0}" y="${y}" width="${x1 - x0}" height="20" fill="${TILE}" rx="10"/>`);
+      s.push(`<rect x="${x0}" y="${y}" width="${Math.max(10, X(v) - x0).toFixed(1)}" height="20" fill="url(#${hi ? 'gho' : 'gh'}${k})" rx="10"${hi ? ` filter="url(#sh${k})"` : ''}/>`);
       s.push(t(10, sub ? y + 10 : y + 14, esc(lab), 12, hi ? PET : TXT, 'start', hi ? 800 : 700));
       if (sub) s.push(t(10, y + 23, esc(sub), 9.5, hi ? ORO2 : MUT, 'start', 600));
       s.push(t(X(v) + 7, y + 15, fmt(v), 11.5, PET, 'start', 800));
@@ -18257,10 +18274,12 @@ const RV = (() => {
     const L = 40, R = 680, T = 26, B = h - 48;
     const N = items.length, slot = (R - L) / N, bw = slot * 0.7;
     const Y = v => B - v / vmax * (B - T);
-    const s = [];
+    const k = ++GID;
+    const s = [defs(k), `<line x1="${L}" y1="${B}" x2="${R}" y2="${B}" stroke="${LINE}" stroke-width="1.5"/>`];
     items.forEach(([lab, v, hi], i) => {
       const x = L + i * slot + (slot - bw) / 2;
-      s.push(`<rect x="${x.toFixed(1)}" y="${Y(v).toFixed(1)}" width="${bw.toFixed(1)}" height="${(B - Y(v)).toFixed(1)}" fill="${hi ? ORO : PET}" rx="3"/>`);
+      const hh = Math.max(0, B - Y(v)), rr = Math.min(7, bw / 2, hh / 2);
+      s.push(`<path d="M${x.toFixed(1)},${B} V${(Y(v) + rr).toFixed(1)} Q${x.toFixed(1)},${Y(v).toFixed(1)} ${(x + rr).toFixed(1)},${Y(v).toFixed(1)} H${(x + bw - rr).toFixed(1)} Q${(x + bw).toFixed(1)},${Y(v).toFixed(1)} ${(x + bw).toFixed(1)},${(Y(v) + rr).toFixed(1)} V${B} Z" fill="url(#${hi ? 'go' : 'gp'}${k})"${hi ? ` filter="url(#sh${k})"` : ''}/>`);
       s.push(t(x + bw / 2, Y(v) - 6, fmt(v), 11, PET, 'middle', 800));
       String(lab).split('|').forEach((part, k) => s.push(t(x + bw / 2, B + 15 + k * 12, esc(part), 9.5, hi ? ORO2 : MUT, 'middle', hi ? 700 : 600)));
     });
@@ -18268,7 +18287,7 @@ const RV = (() => {
       const [mi, mt] = o.marker;
       const mx = Math.max(L + 70, Math.min(R - 70, L + mi * slot));
       s.push(`<line x1="${mx.toFixed(1)}" y1="${T - 12}" x2="${mx.toFixed(1)}" y2="${B}" stroke="${ORO}" stroke-width="2.5" stroke-dasharray="5 3"/>`);
-      s.push(`<rect x="${(mx - 82).toFixed(1)}" y="${T - 24}" width="164" height="18" rx="9" fill="${ORO}"/>`);
+      s.push(`<rect x="${(mx - 82).toFixed(1)}" y="${T - 24}" width="164" height="18" rx="9" fill="${ORO}" filter="url(#sh${k})"/>`);
       s.push(t(mx, T - 11, mt, 10.5, '#3a2c10', 'middle', 800));
     }
     if (o.titoloAsse) s.push(t(L, h - 2, o.titoloAsse, 10, MUT, 'start', 600));
@@ -18278,7 +18297,8 @@ const RV = (() => {
   function ciambella(items, titolo, sotto) {
     const cx = 140, cy = 120, r = 92, rr = 56;
     const tot = items.reduce((a, x) => a + x[1], 0) || 1;
-    const s = [];
+    const k = ++GID;
+    const s = [defs(k), `<circle cx="${cx}" cy="${cy}" r="${r + 6}" fill="none" stroke="${TILE}" stroke-width="6"/>`];
     let a = -Math.PI / 2;
     items.forEach(([lab, v, col]) => {
       let b = a + v / tot * 2 * Math.PI;
@@ -18286,7 +18306,7 @@ const RV = (() => {
       const large = b - a > Math.PI ? 1 : 0;
       const p = `M${(cx + r * Math.cos(a)).toFixed(1)},${(cy + r * Math.sin(a)).toFixed(1)} A${r},${r} 0 ${large} 1 ${(cx + r * Math.cos(b)).toFixed(1)},${(cy + r * Math.sin(b)).toFixed(1)} `
         + `L${(cx + rr * Math.cos(b)).toFixed(1)},${(cy + rr * Math.sin(b)).toFixed(1)} A${rr},${rr} 0 ${large} 0 ${(cx + rr * Math.cos(a)).toFixed(1)},${(cy + rr * Math.sin(a)).toFixed(1)} Z`;
-      s.push(`<path d="${p}" fill="${col}" stroke="#fff" stroke-width="2"/>`);
+      s.push(`<path d="${p}" fill="${col}" stroke="#fff" stroke-width="2.5" filter="url(#sh${k})"/>`);
       a = b;
     });
     s.push(t(cx, cy + 2, titolo, 26, PET, 'middle', 800));
@@ -18304,7 +18324,8 @@ const RV = (() => {
     const L = 70, R = 670, T = 20, B = h - 42;
     const X = v => L + (v - xr[0]) / (xr[1] - xr[0]) * (R - L);
     const Y = v => B - (v - yr[0]) / (yr[1] - yr[0]) * (B - T);
-    const s = [];
+    const k = ++GID;
+    const s = [defs(k)];
     for (let v = yr[0]; v <= yr[1] + 1; v += yr[2]) {
       s.push(`<line x1="${L}" y1="${Y(v).toFixed(1)}" x2="${R}" y2="${Y(v).toFixed(1)}" stroke="${LINE}" stroke-width="1"/>`);
       s.push(t(L - 8, Y(v) + 3.5, `${Math.round(v / 1000)}k €`, 10, MUT, 'end', 600));
@@ -18314,8 +18335,8 @@ const RV = (() => {
     if (sogg) {
       const [m, p, tx] = sogg;
       const xx = X(m), yy = Y(p);
-      s.push(`<circle cx="${xx.toFixed(1)}" cy="${yy.toFixed(1)}" r="11" fill="${ORO}" stroke="${PET}" stroke-width="2.5"/>`);
-      s.push(t(xx > 470 ? xx - 16 : xx + 16, yy + 4, tx, 11.5, PET, xx > 470 ? 'end' : 'start', 800));
+      s.push(`<circle cx="${xx.toFixed(1)}" cy="${yy.toFixed(1)}" r="20" fill="${ORO}" fill-opacity=".22"/><circle cx="${xx.toFixed(1)}" cy="${yy.toFixed(1)}" r="10" fill="${ORO}" stroke="${PET}" stroke-width="2.5" filter="url(#sh${k})"/>`);
+      s.push(pill(xx > 470 ? xx - 24 : xx + 24, yy + 4, tx, PET, k, xx > 470 ? 'end' : 'start'));
     }
     s.push(t(L, h - 4, 'Superficie da annuncio (m²) · prezzo richiesto', 10, MUT, 'start', 600));
     return svg(h, s);
@@ -18325,7 +18346,8 @@ const RV = (() => {
     const fmt = o.fmt || (v => n(v)), unita = o.unita || '€', hr = 44;
     const L = 230, R = 650;
     const X = v => L + (Math.max(vmin, Math.min(vmax, v)) - vmin) / (vmax - vmin) * (R - L);
-    const s = [];
+    const k = ++GID;
+    const s = [defs(k)];
     const top = 30, base = top + items.length * hr;
     const [flo, fhi] = finale;
     s.push(`<rect x="${X(flo).toFixed(1)}" y="${top - 14}" width="${Math.max(4, X(fhi) - X(flo)).toFixed(1)}" height="${base - top + 8}" fill="rgba(198,167,119,.22)" rx="6"/>`);
@@ -18333,7 +18355,7 @@ const RV = (() => {
     items.forEach(([lab, sub, lo, hi], i) => {
       const y = top + i * hr + 6;
       s.push(`<line x1="${L}" y1="${y + 10}" x2="${R}" y2="${y + 10}" stroke="${LINE}" stroke-width="1"/>`);
-      s.push(`<rect x="${X(lo).toFixed(1)}" y="${y + 2}" width="${Math.max(6, X(hi) - X(lo)).toFixed(1)}" height="16" rx="8" fill="${PET}"/>`);
+      s.push(`<rect x="${X(lo).toFixed(1)}" y="${y + 2}" width="${Math.max(6, X(hi) - X(lo)).toFixed(1)}" height="16" rx="8" fill="url(#gh${k})" filter="url(#sh${k})"/>`);
       s.push(t(X(lo) - 6, y + 14, fmt(lo), 10.5, PET, 'end', 700));
       s.push(t(X(hi) + 6, y + 14, fmt(hi), 10.5, PET, 'start', 800));
       s.push(t(10, y + 11, esc(lab), 12, TXT, 'start', 700));
@@ -18342,7 +18364,53 @@ const RV = (() => {
     return svg(base + 10, s);
   }
 
-  return { PET, ORO, ORO2, MUT, n, esc, scala, linee, barreH, colonne, ciambella, dispersione, forbici };
+  /* tachimetro: dove sta un valore tra lo (economico) e hi (caro), con la mediana */
+  function tachimetro(val, lo, hi, med, o = {}) {
+    const k = ++GID, cx = 350, cy = 190, r = 150, sw = 26;
+    const fmt = o.fmt || (v => n(v));
+    const A = v => Math.PI * (1 - Math.max(0, Math.min(1, (v - lo) / (hi - lo || 1))));
+    const P = (ang, rr) => [cx + rr * Math.cos(ang), cy - rr * Math.sin(ang)];
+    const arco = (a1, a2, rr) => { const [x1, y1] = P(a1, rr), [x2, y2] = P(a2, rr); return `M${x1.toFixed(1)},${y1.toFixed(1)} A${rr},${rr} 0 0 1 ${x2.toFixed(1)},${y2.toFixed(1)}`; };
+    const s = [defs(k), `<defs><linearGradient id="gt${k}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#2a7489"/><stop offset=".5" stop-color="${PET}"/><stop offset="1" stop-color="${ORO2}"/></linearGradient></defs>`];
+    s.push(`<path d="${arco(Math.PI, 0, r)}" fill="none" stroke="${TILE}" stroke-width="${sw + 10}" stroke-linecap="round"/>`);
+    s.push(`<path d="${arco(Math.PI, 0, r)}" fill="none" stroke="url(#gt${k})" stroke-width="${sw}" stroke-linecap="round"/>`);
+    for (let i = 0; i <= 10; i++) { const ang = Math.PI * (1 - i / 10); const [a1, b1] = P(ang, r - sw / 2 - 6), [a2, b2] = P(ang, r - sw / 2 - (i % 5 ? 11 : 17)); s.push(`<line x1="${a1.toFixed(1)}" y1="${b1.toFixed(1)}" x2="${a2.toFixed(1)}" y2="${b2.toFixed(1)}" stroke="${MUT}" stroke-width="${i % 5 ? 1 : 2}"/>`); }
+    if (med) { const [mx, my] = P(A(med), r + sw / 2 + 4), [mx2, my2] = P(A(med), r - sw / 2 - 4); s.push(`<line x1="${mx.toFixed(1)}" y1="${my.toFixed(1)}" x2="${mx2.toFixed(1)}" y2="${my2.toFixed(1)}" stroke="#fff" stroke-width="3"/>`); const [lx, ly] = P(A(med), r + sw / 2 + 16); s.push(t(lx, ly, o.labMed || 'mediana ' + fmt(med), 10.5, MUT, A(med) > Math.PI / 2 + 0.2 ? 'end' : A(med) < Math.PI / 2 - 0.2 ? 'start' : 'middle', 700)); }
+    const [nx, ny] = P(A(val), r - sw - 14);
+    s.push(`<line x1="${cx}" y1="${cy}" x2="${nx.toFixed(1)}" y2="${ny.toFixed(1)}" stroke="${ORO}" stroke-width="6" stroke-linecap="round" filter="url(#sh${k})"/>`);
+    s.push(`<circle cx="${cx}" cy="${cy}" r="14" fill="${PET}" stroke="${ORO}" stroke-width="4" filter="url(#sh${k})"/>`);
+    s.push(t(cx, cy + 50, fmt(val), 30, PET, 'middle', 800));
+    s.push(t(cx, cy + 68, o.labVal || '', 11.5, ORO2, 'middle', 800));
+    s.push(t(cx - r, cy + 26, fmt(lo), 11, MUT, 'middle', 700));
+    s.push(t(cx + r, cy + 26, fmt(hi), 11, MUT, 'middle', 700));
+    s.push(t(cx - r, cy + 40, o.labLo || 'più economiche', 10, MUT, 'middle', 600));
+    s.push(t(cx + r, cy + 40, o.labHi || 'più care', 10, MUT, 'middle', 600));
+    return svg(cy + 76, s);
+  }
+
+  /* calendario a barre delle fasi: fasi = [[nome, da, a, colore, nota]] in settimane */
+  function gantt(fasi, settimane, etichetteSett) {
+    const k = ++GID, L = 196, R = 690, T = 34, hr = 40;
+    const X = w => L + w / settimane * (R - L);
+    const s = [defs(k)];
+    for (let w = 0; w <= settimane; w++) {
+      s.push(`<line x1="${X(w).toFixed(1)}" y1="${T - 6}" x2="${X(w).toFixed(1)}" y2="${T + fasi.length * hr}" stroke="${LINE}" stroke-width="1"/>`);
+      if (w < settimane) { s.push(t((X(w) + X(w + 1)) / 2, 12, 'sett. ' + (w + 1), 9.5, PET, 'middle', 800)); if (etichetteSett && etichetteSett[w]) s.push(t((X(w) + X(w + 1)) / 2, 24, etichetteSett[w], 8.5, MUT, 'middle', 600)); }
+    }
+    fasi.forEach(([nome, da, a, col, nota, aperta], i) => {
+      const y = T + i * hr;
+      s.push(`<circle cx="14" cy="${y + 15}" r="10" fill="${col}"/>`);
+      s.push(t(14, y + 19, String(i + 1), 10.5, '#fff', 'middle', 800));
+      s.push(t(32, y + 14, esc(nome), 12, TXT, 'start', 800));
+      if (nota) s.push(t(32, y + 27, esc(nota), 9, MUT, 'start', 600));
+      const w = Math.max(14, X(a) - X(da));
+      s.push(`<rect x="${X(da).toFixed(1)}" y="${y + 5}" width="${w.toFixed(1)}" height="22" rx="11" fill="${col}" filter="url(#sh${k})"/>`);
+      if (aperta) s.push(`<rect x="${X(a).toFixed(1)}" y="${y + 11}" width="${(R - X(a)).toFixed(1)}" height="10" rx="5" fill="${col}" fill-opacity=".22"/>`);
+    });
+    return svg(T + fasi.length * hr + 6, s);
+  }
+
+  return { PET, ORO, ORO2, MUT, n, esc, scala, linee, barreH, colonne, ciambella, dispersione, forbici, tachimetro, gantt };
 })();
 
 /* ---------------------------------------------------------------- utilità dati */
@@ -18401,7 +18469,7 @@ async function costruisciReportValutazione(id) {
   const cc = rvNorm(comuneNome);
   const titoloComune = comuneNome ? comuneNome.toLowerCase().replace(/(^|[\s'-])\S/g, x => x.toUpperCase()) : 'il comune';
 
-  const [dc, tuttiDc, annunci, zone, ntn, incarichi, proposte, transazioni, consulenti] = await Promise.all([
+  const [dc, tuttiDc, annunci, zone, ntn, incarichi, proposte, transazioni, consulenti, richieste, visite, tuttiInc] = await Promise.all([
     DatiComune.findOne({ comune: chiaveComune(comuneNome) }).lean(),
     DatiComune.find({}, { comune: 1, nome: 1, centro: 1, vendita: 1, provincia: 1 }).lean(),
     Concorrenza.find({ comune: new RegExp('^\\s*' + comuneNome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$', 'i') },
@@ -18412,7 +18480,10 @@ async function costruisciReportValutazione(id) {
       { nome: 1, idElemento: 1, comune: 1, via: 1, civico: 1, mq: 1, prezzoIncarico: 1, prezzoValutazione: 1, statoImmobile: 1, tipologiaUnita: 1, locali: 1 }).lean(),
     Proposta.find({ statoProposta: /accettata/i }, { incaricoUfficio: 1, prezzoProposta: 1, prezzoIncarico: 1 }).lean(),
     Transazione.find({}, { incaricoUfficio: 1, prezzoVendita: 1 }).lean(),
-    Consulente.find({}, { nomeCognome: 1, utente: 1, telefono: 1, mail: 1, telefonoPubblico: 1 }).lean()
+    Consulente.find({}, { nomeCognome: 1, utente: 1, telefono: 1, mail: 1, telefonoPubblico: 1, fotoProfilo: 1, ruoloPubblico: 1 }).lean(),
+    BancaDati.find({}, { comuniRicerca: 1, budgetAcquisto: 1, immobileFonteRichiesta: 1, nonContattare: 1, createdAt: 1 }).lean(),
+    Visioni.find({}, { incaricoUfficio: 1, statoAdv: 1, dataVisione: 1 }).lean(),
+    Incarico.find({}, { idElemento: 1, comune: 1, prezzoIncarico: 1, visualizzazioni: 1, contattiRicevuti: 1 }).lean()
   ]);
 
   /* ---------- la casa */
@@ -18520,7 +18591,9 @@ async function costruisciReportValutazione(id) {
   const nomeProv = (dc && dc.provincia) || '';
 
   /* ================================================================ HTML */
-  const card = (titolo, intro, corpo) => `\n  <div class="card">\n    <h2>${titolo}</h2>\n    ${intro ? `<p class="intro">${intro}</p>` : ''}\n    ${corpo || ''}\n  </div>`;
+  let nSez = 0, parteAtt = '';
+  const card = (titolo, intro, corpo, cls) => { nSez++; return `\n  <div class="card${cls ? ' ' + cls : ''}">\n    <div class="kick"><span class="num">${String(nSez).padStart(2, '0')}</span>${parteAtt}</div>\n    <h2>${titolo}</h2>\n    ${intro ? `<p class="intro">${intro}</p>` : ''}\n    ${corpo || ''}\n  </div>`; };
+  const parte = (num, titolo, sotto) => { parteAtt = titolo.replace(/<[^>]+>/g, ''); return `\n  <div class="parte"><div class="pn">Parte ${num}</div><div class="pt">${titolo}</div><div class="ps">${sotto}</div></div>`; };
   const ch = (svgtxt, sub, nota) => (sub ? `<div class="sub">${sub}</div>` : '') + `<div class="chart">${svgtxt}</div>` + (nota ? `<p class="tabnote">${nota}</p>` : '');
   const zs = (val, e, up) => `<div class="zs"><div class="v${up === true ? ' up' : up === false ? ' down' : ''}">${val}</div><div class="e">${e}</div></div>`;
   const euro = (x) => n(rvTondo(x, x >= 100000 ? 1000 : 500)) + ' €';
@@ -18528,6 +18601,7 @@ async function costruisciReportValutazione(id) {
   const fonti = [];
 
   /* 1. L'immobile */
+  sezioni.push(parte('1', `L'immobile e il mercato di ${esc(titoloComune)}`, `Chi vive a ${esc(titoloComune)}, quante case ci sono, quanto costano e come si muovono i prezzi rispetto alla zona.`));
   const kv = [];
   const riga = (k, val) => { if (val && String(val).trim()) kv.push(`<div class="k">${k}</div><div class="val">${esc(val)}</div>`); };
   riga('Indirizzo', indirizzoCompleto);
@@ -18759,6 +18833,7 @@ async function costruisciReportValutazione(id) {
   }
 
   /* 9. Il venduto */
+  sezioni.push(parte('2', `Quanto vale ${laCasa}`, `Cosa si è venduto davvero, le case in concorrenza diretta e i metodi che usiamo per arrivare al valore.`));
   if (ritirati.length >= 3 || vendutiQui.length || ntn.length) {
     let intro = '';
     let corpo = '';
@@ -18793,7 +18868,7 @@ async function costruisciReportValutazione(id) {
       intro += ` Secondo l'Agenzia delle Entrate nel ${anni[anni.length - 1]} a ${esc(titoloComune)} sono state registrate <b>${n(vals[vals.length - 1])}</b> compravendite residenziali.`;
       fonti.push(`Agenzia delle Entrate — OMI, volumi di compravendita (NTN) di ${esc(titoloComune)}`);
     }
-    sezioni.push(card('Cosa si è venduto', intro, corpo));
+    sezioni.push(card('Cosa si è venduto', intro, corpo, 'lunga'));
   }
 
   /* 10. Comparabili */
@@ -18854,19 +18929,218 @@ async function costruisciReportValutazione(id) {
   </div>`;
   }
 
-  const strategia = `
-  <div class="card">
-    <h2>Strategia di vendita · Evento Casa Forte</h2>
-    <p class="intro">La vendita è costruita attorno all'<b>Evento Casa Forte</b>, la nostra giornata di porte aperte su prenotazione: concentra in un'unica giornata le visite dei potenziali acquirenti in target, crea senso di opportunità e ci permette di partire con decisione dalla parte alta della valutazione.</p>
-    <div class="passo"><div class="n">1</div><div class="tx"><b>Sopralluogo, immobile e documenti.</b> Verifica di misure, stato, finiture e impianti; APE e documenti pronti prima della pubblicazione; servizio fotografico professionale, planimetria ed eventuale video o virtual tour.</div></div>
-    <div class="passo"><div class="n">2</div><div class="tx"><b>Pubblicazione nella parte alta della fascia${vMax ? ', fino a ' + n(vMax) + ' €' : ''}.</b> Annuncio sui portali con in primo piano i punti di forza, più cartello in vetrina.</div></div>
-    <div class="passo"><div class="n">3</div><div class="tx"><b>Promozione mirata dell'Evento.</b> Campagna sui portali e sui social, inviti agli acquirenti del database Forte che cercano una casa come questa, prenotazioni con slot da 20 minuti.</div></div>
-    <div class="passo"><div class="n">4</div><div class="tx"><b>La giornata dell'Evento Casa Forte.</b> Porte aperte su appuntamento, accoglienza dedicata, raccolta dei dati e del feedback di ogni visitatore, stimolo alla presentazione delle proposte.</div></div>
-    <div class="passo"><div class="n">5</div><div class="tx"><b>Dopo l'Evento.</b> Report alla proprietà con visite, feedback e valore percepito; gestione e confronto delle proposte ricevute per chiudere al valore migliore.</div></div>
-  </div>`;
+  if (valuta) sezioni.push(valuta);
+
+  /* ================================================================ PARTE 3 · IL PIANO PER IL MIGLIOR PREZZO */
+  sezioni.push(parte('3', 'Come arriviamo al <span>miglior prezzo</span>', `Il metodo Forte Immobiliare: prezzo di lancio, domanda già pronta, Evento Casa Forte e Sessione Proposte. Le fasi, i tempi e cosa ricevi ogni settimana.`));
+
+  // --- la domanda: richieste arrivate a Forte per case nella zona
+  const chiave = (x) => String(x || '').trim().toUpperCase();
+  const incById = {};
+  tuttiInc.forEach(i => { incById[chiave(i.idElemento)] = i; });
+  const pulisciComune = (c) => rvNorm(c).replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+(mi|va|co)$/, '').trim();
+  const zonaSet = new Set([cc]);
+  if (dc && dc.centro && dc.centro.lat) {
+    tuttiDc.filter(d => d.centro && d.centro.lat)
+      .map(d => ({ c: rvNorm(d.nome || d.comune), km: Math.hypot((d.centro.lat - dc.centro.lat) * 111, (d.centro.lng - dc.centro.lng) * 78) }))
+      .filter(d => d.km <= 6.5).forEach(d => zonaSet.add(d.c));
+  }
+  const unAnnoFa = Date.now() - 365 * 864e5;
+  const domanda = richieste.filter(b => !b.nonContattare).map(b => {
+    const inc = incById[chiave(b.immobileFonteRichiesta)];
+    let bud = rvNum(b.budgetAcquisto);
+    if (bud > 0 && bud < 2000) bud *= 1000;
+    if (!(bud >= 30000 && bud <= 5000000)) bud = 0;
+    const prezzoRif = bud || (inc ? rvNum(inc.prezzoIncarico) : 0);
+    const com = new Set((b.comuniRicerca || []).map(pulisciComune).filter(Boolean));
+    if (inc && inc.comune) com.add(pulisciComune(inc.comune));
+    const t = new Date(b.createdAt || 0).getTime();
+    return { prezzoRif, qui: com.has(cc), zona: [...com].some(c => zonaSet.has(c)), recente: t > unAnnoFa };
+  });
+  const domZona = domanda.filter(d => d.zona);
+  const domQui = domanda.filter(d => d.qui);
+  const inFascia = (d) => vMin && vMax && d.prezzoRif >= vMin * 0.8 && d.prezzoRif <= vMax * 1.25;
+  const domFascia = domZona.filter(inFascia);
+  const domFasciaAnno = domFascia.filter(d => d.recente);
+
+  // --- il nostro lavoro: visite per vendita e visualizzazioni
+  const vendutiChiavi = new Set(vendutiForte.map(x => chiave(x.idElemento)).filter(Boolean));
+  const visitePer = {};
+  visite.forEach(x => { const k = chiave(x.incaricoUfficio); if (k && /fatto/i.test(x.statoAdv || '')) visitePer[k] = (visitePer[k] || 0) + 1; });
+  let visitePerVendita = [...vendutiChiavi].map(k => visitePer[k] || 0).filter(x => x > 0);
+  if (visitePerVendita.length < 3 || rvMediana(visitePerVendita) < 3) visitePerVendita = [];
+  const visiteTot = visite.filter(x => /fatto/i.test(x.statoAdv || '')).length;
+  const viste = tuttiInc.map(i => rvNum(i.visualizzazioni)).filter(x => x > 0);
+  const contatti = tuttiInc.map(i => rvNum(i.contattiRicevuti)).filter(x => x > 0);
+
+  // --- prezzo di lancio: appena sotto una soglia dei filtri dei portali
+  let lancio = 0, soglia = 0;
+  if (vCons && vMax) {
+    const passoS = vMax >= 500000 ? 50000 : 10000;
+    soglia = Math.floor((vMax + 1000) / passoS) * passoS;
+    lancio = soglia - (passoS >= 50000 ? 1000 : 1000);
+    if (lancio < vCons) { soglia = Math.ceil(vCons / passoS) * passoS; lancio = Math.max(vCons, soglia - 1000); }
+  }
+
+  // 3a. prezzo di lancio
+  if (lancio) {
+    const band = vCons < 200000 ? 20000 : vCons < 450000 ? 25000 : 50000;
+    const centro = Math.floor(lancio / band) * band;
+    const fasce = []; for (let b = centro - 3 * band; b <= centro + 3 * band; b += band) if (b > 0) fasce.push(b);
+    const conta = fasce.map(b => domZona.filter(d => d.prezzoRif >= b && d.prezzoRif < b + band).length);
+    let corpo = `<div class="lancio">
+      <div class="l1"><div class="e">Prezzo di lancio consigliato</div><div class="p">€ ${n(lancio)}</div><div class="s">tra il valore più probabile (${n(vCons)} €) e la fascia massima (${n(vMax)} €)</div></div>
+      <div class="l2"><div class="riga"><span class="ok">✓</span><span>Compare a chi filtra <b>“fino a ${n(soglia)} €”</b>, una delle soglie che chi cerca imposta più spesso nei filtri dei portali.</span></div>
+      <div class="riga"><span class="ok">✓</span><span>Lascia margine per una trattativa che resta <b>sopra il valore più probabile</b>.</span></div>
+      <div class="riga"><span class="no">✕</span><span>A ${n(soglia + 2000)} € ${laCasa} sparirebbe dalle ricerche di tutti quelli che hanno impostato ${n(soglia)} € come tetto.</span></div></div>
+    </div>`;
+    if (conta.reduce((a, x) => a + x, 0) >= 12) {
+      const items = fasce.map((b, i) => [`${Math.round(b / 1000)}k|${Math.round((b + band) / 1000)}k`, conta[i], lancio >= b && lancio < b + band]);
+      corpo += ch(RV.colonne(items, Math.max(...conta) * 1.3, { h: 230, titoloAsse: 'Richieste ricevute da Forte per case della zona, per prezzo dell’immobile richiesto o budget dichiarato' }), 'In che fascia di prezzo cercano gli acquirenti della zona');
+    }
+    sezioni.push(card('Il prezzo di lancio giusto',
+      `Chi cerca casa imposta sempre un prezzo massimo nei filtri dei portali, e quasi sempre a cifra tonda. Il prezzo di lancio decide <b>quante persone vedono l’annuncio</b>: per questo partiamo dalla parte alta della valutazione, ma appena sotto una soglia di ricerca.`, corpo));
+  }
+
+  // 3b. la domanda c'è già
+  {
+    const tiles = [];
+    if (domFascia.length) tiles.push(zs(n(domFascia.length), `richieste per case<br>della zona in questa fascia`));
+    if (domFasciaAnno.length && domFasciaAnno.length !== domFascia.length) tiles.push(zs(n(domFasciaAnno.length), 'di cui negli<br>ultimi 12 mesi'));
+    if (domQui.length) tiles.push(zs(n(domQui.length), `acquirenti che cercano<br>a ${esc(titoloComune)}`));
+    if (viste.length >= 5) tiles.push(zs(n(rvMediana(viste)), 'visualizzazioni medie<br>di un nostro annuncio'));
+    if (visitePerVendita.length >= 3) tiles.push(zs(n(rvMediana(visitePerVendita)), 'visite medie prima<br>della vendita'));
+    else if (visiteTot >= 20) tiles.push(zs(n(visiteTot), 'visite accompagnate<br>registrate in agenda'));
+    if (sconti.length >= 3) tiles.push(zs(rvPct(scontoMedio, 1), `trattativa media<br>sulle nostre vendite`, scontoMedio > -4 ? true : undefined));
+    if (tiles.length >= 3) {
+      let intro = `${laCasa.charAt(0).toUpperCase() + laCasa.slice(1)} non parte da zero. Nel nostro archivio ci sono <b>${n(domanda.length)} acquirenti</b> che ci hanno contattato`;
+      intro += domFascia.length ? `, e <b>${n(domFascia.length)}</b> di loro cercavano nella zona di ${esc(titoloComune)} una casa tra ${n(rvTondo(vMin * 0.8, 1000))} e ${n(rvTondo(vMax * 1.25, 1000))} €.` : '.';
+      intro += ' Prima ancora della pubblicazione li ricontattiamo uno per uno e li invitiamo all’Evento Casa Forte.';
+      sezioni.push(card('La domanda c’è già', intro, `<div class="kpi">${tiles.slice(0, 6).join('')}</div>`));
+    }
+  }
+
+  // 3c. il prezzo giusto vende prima (dai ritirati)
+  {
+    const conG = ritirati.map(r => { const a = rvData(r.dataAnnuncio), b = rvData(r.dataUltimoMonitoraggio); return a && b ? { g: (b - a) / 864e5, ppm: r.ppm, cat: r.cat } : null; }).filter(x => x && x.g >= 0 && x.g < 1500);
+    const rif = ppmComune || rvMediana(conG.map(x => x.ppm));
+    const giusti = conG.filter(x => x.ppm <= rif * 1.05).map(x => x.g), alti = conG.filter(x => x.ppm > rif * 1.12).map(x => x.g);
+    if (giusti.length >= 5 && alti.length >= 5 && rvMediana(alti) > rvMediana(giusti) * 1.1) {
+      const gG = rvMediana(giusti), gA = rvMediana(alti);
+      sezioni.push(card('Il prezzo giusto vende prima',
+        `L’abbiamo misurato sugli annunci usciti dal mercato a ${esc(titoloComune)}: le case proposte in linea con il mercato sono rimaste online in mediana <b>${n(gG)} giorni</b>, quelle proposte più del 12% sopra <b>${n(gA)} giorni</b>. Un annuncio che resta fermo perde visibilità e chi lo vede inizia a chiedersi cosa non va: l’attenzione più alta è nelle <b>prime 3 settimane</b>, ed è lì che vogliamo chiudere.`,
+        ch(RV.barreH([['In linea con il mercato', `${giusti.length} annunci`, gG, true], ['Oltre il 12% sopra', `${alti.length} annunci`, gA, false]], Math.max(gG, gA) * 1.25, { fmt: x => n(x) + ' giorni', lw: 200, hRiga: 38, titoloAsse: 'Giorni online prima di uscire dal mercato (mediana)' }), 'Giorni online in base al prezzo richiesto')));
+    }
+  }
+
+  // 3d. modalità operativa: il calendario
+  const lunedi = new Date(oggiRoma); lunedi.setDate(lunedi.getDate() + ((8 - lunedi.getDay()) % 7 || 7));
+  const giornoSett = (w) => { const d = new Date(lunedi); d.setDate(d.getDate() + w * 7); return String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0'); };
+  const SETT = 10;
+  const fasi = [
+    ['Preparazione', 0, 2, '#2a7489', 'documenti, foto, planimetria, video'],
+    ['Lancio sui portali e social', 2, 3, RV.PET, 'annuncio, Instagram, inviti WhatsApp', true],
+    ['Evento Casa Forte', 3, 4, RV.ORO, 'porte aperte su prenotazione'],
+    ['Sessione Proposte', 4, 5, '#9a7d47', 'tutte le offerte nello stesso giorno'],
+    ['Accettazione e mutuo', 5, 6, '#2f6f84', 'verifica acquirente e banca'],
+    ['Preliminare e rogito', 6, 10, '#6b7a82', 'compromesso, perizia, atto notarile', true]
+  ];
+  sezioni.push(card('Modalità operativa: le fasi e i tempi',
+    `Ogni vendita segue lo stesso calendario. Se firmiamo l’incarico questa settimana, si parte <b>lunedì ${giornoSett(0)}</b> e l’obiettivo è raccogliere le proposte entro <b>la 5ª settimana (${giornoSett(4)}–${giornoSett(5)})</b>. Le date sono indicative e si adattano ai documenti e alla disponibilità della casa.`,
+    ch(RV.gantt(fasi, SETT, Array.from({ length: SETT }, (_, w) => giornoSett(w))), 'Il calendario della vendita')));
+
+  // 3e. le fasi nel dettaglio
+  const fase = (num, col, titolo, quando, noi, tu) => `<div class="fase" style="--c:${col}"><div class="fh"><span class="fn">${num}</span><div><div class="ft">${titolo}</div><div class="fq">${quando}</div></div></div>
+    <div class="fc"><div class="fl">Cosa facciamo noi</div><ul>${noi.map(x => `<li>${x}</li>`).join('')}</ul></div>
+    ${tu ? `<div class="fc tu"><div class="fl">Cosa ricevi tu</div><ul>${tu.map(x => `<li>${x}</li>`).join('')}</ul></div>` : ''}</div>`;
+  sezioni.push(card('Le fasi nel dettaglio',
+    'Per ogni fase: cosa fa il nostro team e cosa ricevi tu. Hai sempre un unico consulente di riferimento.',
+    `<div class="fasi">
+    ${fase(1, '#2a7489', 'Preparazione', `settimane 1–2 · dal ${giornoSett(0)}`, ['Raccolta e controllo dei documenti, accesso agli atti in Comune per verificare la conformità', 'Servizio fotografico professionale e foto ritoccate', 'Planimetria a colori e arredata, video verticale per i social', 'Consigli di home staging: cosa togliere, cosa sistemare prima delle foto'], ['La lista dei documenti con lo stato di ognuno', 'Le foto e l’annuncio da approvare prima della pubblicazione'])}
+    ${fase(2, RV.PET, 'Lancio', `settimana 3 · dal ${giornoSett(2)}`, [`Pubblicazione${lancio ? ' a <b>' + n(lancio) + ' €</b>' : ''} su Immobiliare.it, Idealista e sul sito Forte`, 'Instagram e inserzioni sponsorizzate sulla zona', `Messaggio WhatsApp personale agli acquirenti già in archivio${domFascia.length ? ' (' + n(domFascia.length) + ' in fascia)' : ''}`, 'Cartello e vetrina in agenzia'], ['Le credenziali del tuo <b>report online</b>: visualizzazioni, richieste e visite aggiornate'])}
+    ${fase(3, RV.ORO, 'Evento Casa Forte', `fine settimana 3 · ${giornoSett(3)}`, ['Una giornata di porte aperte su prenotazione, con appuntamenti da 20 minuti', 'Ogni visitatore è già qualificato: budget, mutuo, tempi', 'Raccolta del feedback e del valore percepito di ogni visita'], ['Il riepilogo della giornata: quante visite, chi è interessato, a quale prezzo'])}
+    ${fase(4, '#9a7d47', 'Sessione Proposte', `settimana 5 · ${giornoSett(4)}`, ['Chi è interessato presenta la proposta nella stessa fascia oraria, con assegno di deposito', 'Le offerte si confrontano tutte insieme: la concorrenza tra acquirenti alza il prezzo', 'Proposta firmata anche a distanza con codice OTP'], ['Tutte le proposte affiancate, con prezzo, tempi e condizioni, per scegliere la migliore'])}
+    ${fase(5, '#2f6f84', 'Accettazione e mutuo', `settimane 5–6`, ['Consulenza mutuo all’acquirente con il nostro mediatore creditizio', 'Verifica della fattibilità prima di vincolarti', 'Accettazione e incasso del deposito'], ['La sicurezza che l’acquirente può comprare davvero'])}
+    ${fase(6, '#6b7a82', 'Preliminare e rogito', `dalla settimana 6`, ['Preparazione del preliminare e registrazione', 'Assistenza alla perizia della banca', 'Coordinamento con il notaio fino al rogito'], ['Le date di preliminare e rogito concordate in anticipo'])}
+    </div>`));
+
+  // 3f. il controllo settimanale
+  const vm = viste.length >= 5 ? rvMediana(viste) : 0;
+  sezioni.push(card('Il controllo ogni settimana',
+    `Ogni lunedì aggiorniamo i numeri dell’annuncio nel tuo report online. Se i segnali non arrivano, non aspettiamo: dopo <b>3 settimane</b> ci sediamo insieme e decidiamo, dati alla mano, se cambiare presentazione, foto o prezzo. Nessuna decisione sul prezzo senza il tuo accordo.`,
+    `<div class="tbl-scroll"><table class="controllo"><thead><tr><th>Segnale</th><th>Cosa misuriamo</th><th>Va bene se…</th><th>Se non va</th></tr></thead><tbody>
+      <tr><td><b>Visibilità</b></td><td>Visualizzazioni sui portali</td><td>${vm ? `in linea con i nostri annunci (circa ${n(vm)})` : 'crescono ogni settimana'}</td><td>Nuove foto di copertina, titolo, rilancio</td></tr>
+      <tr><td><b>Interesse</b></td><td>Richieste e contatti</td><td>arrivano richieste già dalla prima settimana</td><td>Rivediamo testo, foto e prezzo di lancio</td></tr>
+      <tr><td><b>Visite</b></td><td>Visite fatte, Evento Casa Forte</td><td>${visitePerVendita.length >= 3 ? `almeno ${n(rvMediana(visitePerVendita))} visite entro la 4ª settimana (la media delle nostre vendite)` : 'le visite si concentrano nell’Evento Casa Forte'}</td><td>Nuovo giro di inviti, secondo evento</td></tr>
+      <tr><td><b>Feedback</b></td><td>Commenti e valore percepito</td><td>il valore percepito è vicino al prezzo</td><td>Interveniamo su ciò che frena (difetti, lavori, prezzo)</td></tr>
+    </tbody></table></div>`));
+
+  // 3g. cosa ci serve
+  const docs = ['Atto di provenienza (rogito, successione o donazione)', 'Planimetria e visura catastale', 'APE · attestato di prestazione energetica (se manca lo facciamo fare noi)', 'Regolamento di condominio e ultimi consuntivi delle spese', 'Certificazioni degli impianti, se ci sono', 'Documento d’identità e codice fiscale di tutti i proprietari', 'Se c’è un mutuo: la banca e il debito residuo', 'Pratiche edilizie e condoni: li verifichiamo noi con l’accesso agli atti'];
+  sezioni.push(card('Cosa ci serve da te',
+    'Con i documenti pronti dal primo giorno l’acquirente si fida di più e la trattativa è più veloce. Molti li recuperiamo noi.',
+    `<div class="checklist">${docs.map(d => `<div class="ci"><span class="box"></span>${d}</div>`).join('')}</div>`));
+
+  // 3h. i nostri impegni
+  sezioni.push(card('I nostri impegni', '',
+    `<div class="impegni">
+      <div class="imp"><div class="ic">◎</div><b>Un consulente dedicato</b><span>Una sola persona di riferimento, raggiungibile anche su WhatsApp.</span></div>
+      <div class="imp"><div class="ic">◷</div><b>Report online ogni settimana</b><span>Visualizzazioni, richieste, visite e commenti, quando vuoi tu.</span></div>
+      <div class="imp"><div class="ic">◆</div><b>Solo acquirenti qualificati</b><span>Budget, mutuo e tempi verificati prima di entrare in casa.</span></div>
+      <div class="imp"><div class="ic">✦</div><b>Tutte le proposte insieme</b><span>La Sessione Proposte mette gli acquirenti in competizione.</span></div>
+    </div>`));
 
   const cons = consulenti.find(c => c.utente === v.consulente) || null;
+  const fotoCons = cons && /^https?:\/\//.test(cons.fotoProfilo || '') ? cons.fotoProfilo : '';
   const firma = cons ? `<br>Il tuo consulente: <b>${esc(cons.nomeCognome)}</b>${(cons.telefonoPubblico || cons.telefono) ? ' · ' + esc(cons.telefonoPubblico || cons.telefono) : ''}` : '';
+
+  /* ---------------- pagina "In sintesi" */
+  const hero = [];
+  if (vCons) hero.push(`<div class="h-val"><div class="e">Valore più probabile</div><div class="p">€ ${n(vCons)}</div><div class="s">fascia ${n(vMin)} – ${n(vMax)} €${valPpm ? ` · ${n(rvTondo(valPpm, 10))} €/m²` : ''}</div></div>`);
+  const tile = (v1, e, cls) => `<div class="h-t${cls ? ' ' + cls : ''}"><div class="v">${v1}</div><div class="e">${e}</div></div>`;
+  const piccoli = [];
+  if (lancio) piccoli.push(tile('€ ' + n(lancio), 'prezzo di lancio<br>consigliato', 'oro'));
+  const vUnAnno = varMesi(sV, 12);
+  if (vUnAnno != null) piccoli.push(tile(rvPct(vUnAnno), `prezzi a ${esc(titoloComune)}<br>nell’ultimo anno`, vUnAnno >= 0 ? 'up' : 'down'));
+  if (valPpm && ppmComune) { const d = (valPpm / ppmComune - 1) * 100; piccoli.push(tile(rvPct(d, 0), `rispetto al €/m² medio<br>degli annunci (${n(ppmComune)})`)); }
+  if (domFascia.length) piccoli.push(tile(n(domFascia.length), 'richieste in archivio<br>per case simili in zona'));
+  else if (attiviTutti.length) piccoli.push(tile(n(attiviTutti.length), `case in vendita<br>a ${esc(titoloComune)}`));
+  let gauge = '';
+  const baseG = (stessaCat.length >= 8 ? stessaCat : attivi).map(r => r.ppm);
+  if (valPpm && baseG.length >= 8) {
+    const lo = rvTondo(rvQuantile(baseG, 0.1), 50), hi = rvTondo(rvQuantile(baseG, 0.9), 50);
+    gauge = `<div class="h-gauge"><div class="sub">Dove si colloca il prezzo al m²</div>${RV.tachimetro(valPpm, Math.min(lo, valPpm * 0.9), Math.max(hi, valPpm * 1.1), rvMediana(baseG), { fmt: x => n(rvTondo(x, 10)) + ' €', labVal: '€/m² · ' + laCasa, labMed: 'mediana ' + n(rvTondo(rvMediana(baseG), 10)) + ' €', labLo: 'annunci più economici', labHi: 'annunci più cari' })}<p class="tabnote">Confronto con ${n(baseG.length)} ${baseG.length === stessaCat.length && stessaCat.length >= 8 ? categoria.toLowerCase() : 'case'} in vendita a ${esc(titoloComune)} (dal 10% più economico al 10% più caro).</p></div>`;
+  }
+  const punti = [];
+  if (vUnAnno != null && sV) punti.push(`<b>Il mercato.</b> A ${esc(titoloComune)} i prezzi richiesti sono ${vUnAnno >= 1 ? 'in crescita' : vUnAnno <= -1 ? 'in calo' : 'stabili'} (${rvPct(vUnAnno)} in un anno), oggi in media ${n(ultimo(sV))} €/m².`);
+  if (vCons && metodi.length >= 2) punti.push(`<b>Il valore.</b> ${metodi.length} metodi indipendenti (OMI, annunci, comparabili, venduto) confermano una fascia tra ${n(vMin)} e ${n(vMax)} €.`);
+  if (lancio) punti.push(`<b>La strategia.</b> Lancio a ${n(lancio)} €, Evento Casa Forte in 3ª settimana e Sessione Proposte entro la 5ª, per mettere gli acquirenti in competizione.`);
+  const sintesi = `
+  <div class="sintesi">
+    <div class="s-top"><div class="marchio">FORTE <span>IMMOBILIARE</span></div><div class="s-kick">In sintesi</div></div>
+    <h1>${esc(indirizzoCompleto)}</h1>
+    <div class="riga">
+      <span>${esc(v.tipologia || 'Immobile')}${v.locali ? ' · ' + esc(v.locali) + ' locali' : ''}${mq ? ' · <b>' + n(mq) + ' m²</b>' : ''}</span>
+      ${v.stato ? `<span>Stato: <b>${esc(v.stato)}</b></span>` : ''}
+      <span>Data: <b>${dataIt}</b></span>
+    </div>
+    <div class="h-grid">${hero.join('')}<div class="h-piccoli">${piccoli.join('')}</div></div>
+    ${punti.length ? `<div class="punti">${punti.map(x => `<div class="pt">${x}</div>`).join('')}</div>` : ''}
+  </div>
+  ${gauge ? `<div class="card">${gauge}</div>` : ''}`;
+
+  const casaSvg = `<svg class="cover-casa" viewBox="0 0 420 360" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g fill="none" stroke="#C6A777" stroke-linejoin="round" stroke-linecap="round">
+    <path d="M30 330 H390" stroke-width="2" opacity=".5"/>
+    <path d="M70 330 V170 L210 60 L350 170 V330" stroke-width="3"/>
+    <path d="M40 190 L210 50 L380 190" stroke-width="5"/>
+    <path d="M285 108 V62 H318 V134" stroke-width="3"/>
+    <rect x="175" y="240" width="70" height="90" rx="4" stroke-width="3"/>
+    <circle cx="232" cy="288" r="3.5" fill="#C6A777"/>
+    <rect x="100" y="205" width="52" height="52" rx="3" stroke-width="2.5"/><path d="M126 205 V257 M100 231 H152" stroke-width="1.5"/>
+    <rect x="268" y="205" width="52" height="52" rx="3" stroke-width="2.5"/><path d="M294 205 V257 M268 231 H320" stroke-width="1.5"/>
+    <circle cx="210" cy="150" r="20" stroke-width="2.5"/><path d="M210 130 V170 M190 150 H230" stroke-width="1.5"/>
+  </g></svg>`;
+
   const html = `<!doctype html>
 <html lang="it">
 <head>
@@ -18875,7 +19149,7 @@ async function costruisciReportValutazione(id) {
 <title>Valutazione — ${esc(indirizzoCompleto)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=Playfair+Display:ital,wght@0,600;0,700;1,600&display=swap" rel="stylesheet">
 ${RV_CSS}
 </head>
 <body>
@@ -18883,37 +19157,32 @@ ${RV_CSS}
   <div class="cover">
     <div class="cover-top">
       <div class="marchio">FORTE <span>IMMOBILIARE</span></div>
-      <div class="cover-kick">Valutazione immobiliare</div>
+      <div class="cover-kick">Valutazione · Piano di vendita</div>
     </div>
+    ${casaSvg}
     <div class="cover-mid">
-      <h1 class="cover-h">Vendere casa<br>è un'emozione <span>Forte</span>.</h1>
+      <div class="cover-pre">Report di valutazione</div>
+      <h1 class="cover-h">Il valore<br>della tua casa,<br><em>e come ottenerlo.</em></h1>
+      <div class="cover-capitoli"><span>01 · Il mercato</span><span>02 · Il valore</span><span>03 · Il piano per il miglior prezzo</span></div>
     </div>
     <div class="cover-bottom">
-      <div class="e">Immobile</div>
-      <div class="v">${esc(v.tipologia || 'Immobile')} · ${esc(indirizzoCompleto)}</div>
-      <div class="cb-row">
-        ${cliente ? `<div><div class="e">Preparata per</div><div class="v2">${esc(cliente)}</div></div>` : ''}
-        <div><div class="e">Data</div><div class="v2">${dataIt}</div></div>
+      <div class="cb-l">
+        <div class="e">Immobile</div>
+        <div class="v">${esc(v.tipologia || 'Immobile')} · ${esc(indirizzoCompleto)}</div>
+        <div class="cb-row">
+          ${cliente ? `<div><div class="e">Preparata per</div><div class="v2">${esc(cliente)}</div></div>` : ''}
+          <div><div class="e">Data</div><div class="v2">${dataIt}</div></div>
+        </div>
       </div>
+      ${cons ? `<div class="cb-cons">${fotoCons ? `<img src="${esc(fotoCons)}" alt="">` : `<div class="ini">${esc(String(cons.nomeCognome || '?').split(' ').map(x => x.charAt(0)).join('').slice(0, 2))}</div>`}<div><div class="e">Il tuo consulente</div><div class="v2">${esc(cons.nomeCognome)}</div>${(cons.telefonoPubblico || cons.telefono) ? `<div class="tel">${esc(cons.telefonoPubblico || cons.telefono)}</div>` : ''}</div></div>` : ''}
     </div>
   </div>
 <div class="wrap">
-  <div class="intesta">
-    <div class="marchio">FORTE <span>IMMOBILIARE</span></div>
-    <h1>Valutazione immobiliare<br>${esc(indirizzoCompleto)}</h1>
-    <div class="riga">
-      <span>${esc(v.tipologia || 'Immobile')}${v.locali ? ' ' + esc(v.locali) + ' locali' : ''}${mq ? ' · <b>' + n(mq) + ' m²</b>' : ''}</span>
-      ${v.stato ? `<span>Stato: <b>${esc(v.stato)}</b></span>` : ''}
-      <span>Data: <b>${dataIt}</b></span>
-    </div>
-    ${cliente ? `<div class="per">Redatta da <b>Forte Immobiliare S.r.l.</b> per <b>${esc(cliente)}</b>.</div>` : ''}
-  </div>
+${sintesi}
 ${sezioni.join('')}
-${valuta}
-${strategia}
   <div class="card fonti">
     <b style="color:var(--txt);">Fonti</b><br>
-    ${fonti.concat(['Scheda di valutazione Forte Immobiliare e dati forniti dalla proprietà']).join(' ·<br>')}
+    ${fonti.concat(['Archivio Forte Immobiliare: richieste degli acquirenti, visite, visualizzazioni degli annunci e vendite concluse', 'Scheda di valutazione Forte Immobiliare e dati forniti dalla proprietà']).join(' ·<br>')}
   </div>
   <div class="piede">
     <b>Forte Immobiliare S.r.l.</b> · Legnano (MI), Via Cesare Beccaria 9${firma}<br>
@@ -18941,8 +19210,67 @@ const RV_CSS = `<style>
   .intesta .per{margin-top:14px;font-size:13.5px;color:#eaf2f5;border-top:1px solid rgba(255,255,255,.18);padding-top:12px;position:relative;z-index:1}
   .intesta .per b{color:var(--oro2)}
   .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:22px;margin-top:16px;box-shadow:0 4px 18px rgba(11,59,74,.05)}
-  h2{font-size:12px;text-transform:uppercase;letter-spacing:1.3px;color:var(--oro);font-weight:800;margin-bottom:14px;display:flex;align-items:center;gap:10px}
-  h2::before{content:"";width:22px;height:3px;background:var(--oro);border-radius:99px;display:inline-block}
+  .card{position:relative;overflow:hidden}
+  .card::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:linear-gradient(180deg,var(--oro),rgba(198,167,119,0))}
+  .kick{display:flex;align-items:center;gap:10px;font-size:10.5px;text-transform:uppercase;letter-spacing:1.4px;color:var(--oro);font-weight:800;margin-bottom:6px}
+  .kick .num{background:var(--pet);color:var(--oro2);border-radius:7px;padding:3px 7px;letter-spacing:.5px;font-size:11px}
+  h2{font-family:'Playfair Display',Georgia,serif;font-size:25px;line-height:1.2;color:var(--pet);font-weight:700;margin-bottom:12px;letter-spacing:-.2px}
+  .valuta h2{font-family:'Playfair Display',Georgia,serif;font-size:28px;color:#fff}
+  .parte{margin-top:34px;background:linear-gradient(120deg,#0B3B4A 0%,#0e2a35 70%);border-radius:20px;padding:34px 32px;color:#fff;position:relative;overflow:hidden;box-shadow:0 12px 32px rgba(11,59,74,.25)}
+  .parte::after{content:"";position:absolute;right:-70px;top:-90px;width:300px;height:300px;border-radius:50%;border:2px solid rgba(198,167,119,.35)}
+  .parte::before{content:"";position:absolute;right:40px;bottom:-110px;width:220px;height:220px;border-radius:50%;background:rgba(198,167,119,.12)}
+  .parte .pn{font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--oro);font-weight:800}
+  .parte .pt{font-family:'Playfair Display',Georgia,serif;font-size:36px;line-height:1.12;font-weight:700;margin-top:8px;position:relative;z-index:1}
+  .parte .pt span{color:var(--oro);font-style:italic}
+  .parte .ps{font-size:14.5px;color:#cfe1e8;margin-top:12px;max-width:600px;position:relative;z-index:1}
+  .sintesi{background:#fff;border:1px solid var(--line);border-radius:20px;padding:28px;box-shadow:0 10px 30px rgba(11,59,74,.08)}
+  .s-top{display:flex;align-items:center;justify-content:space-between}
+  .sintesi .marchio{color:var(--pet)}
+  .s-kick{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--oro);font-weight:800}
+  .sintesi h1{font-family:'Playfair Display',Georgia,serif;font-size:32px;line-height:1.15;color:var(--pet);margin-top:16px}
+  .sintesi .riga{display:flex;flex-wrap:wrap;gap:6px 18px;margin-top:10px;font-size:13px;color:var(--mut)}
+  .sintesi .riga b{color:var(--pet)}
+  .h-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:12px;margin-top:22px}
+  .h-val{background:linear-gradient(145deg,#0B3B4A,#0e2a35);border-radius:16px;padding:22px;color:#fff;display:flex;flex-direction:column;justify-content:center;position:relative;overflow:hidden}
+  .h-val::after{content:"";position:absolute;right:-40px;bottom:-60px;width:170px;height:170px;border-radius:50%;background:rgba(198,167,119,.16)}
+  .h-val .e{font-size:11px;letter-spacing:1.5px;text-transform:uppercase;color:var(--oro2);font-weight:800}
+  .h-val .p{font-size:40px;font-weight:800;margin-top:6px;line-height:1}
+  .h-val .s{font-size:12.5px;color:#bcd6df;margin-top:8px}
+  .h-piccoli{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .h-t{background:var(--tile);border:1px solid var(--line);border-radius:14px;padding:14px}
+  .h-t .v{font-size:21px;font-weight:800;color:var(--pet)}
+  .h-t.up .v{color:#1f7a53}.h-t.down .v{color:#b5534a}
+  .h-t.oro{background:linear-gradient(145deg,#f6efe2,#efe2c7);border-color:#e6d2a4}.h-t.oro .v{color:#7a5f2c}
+  .h-t .e{font-size:10.5px;color:var(--mut);font-weight:700;margin-top:3px;line-height:1.35}
+  .punti{margin-top:18px;display:grid;gap:8px}
+  .punti .pt{font-size:14px;color:#41525a;padding:10px 14px;border-left:3px solid var(--oro);background:#fbfaf6;border-radius:0 10px 10px 0}
+  .punti .pt b{color:var(--pet)}
+  .lancio{display:grid;grid-template-columns:.9fr 1.1fr;gap:14px;margin-top:14px}
+  .lancio .l1{background:linear-gradient(145deg,#C6A777,#9a7d47);border-radius:16px;padding:20px;color:#fff}
+  .lancio .l1 .e{font-size:11px;letter-spacing:1.3px;text-transform:uppercase;font-weight:800;color:#fff8ea}
+  .lancio .l1 .p{font-size:34px;font-weight:800;margin-top:6px}
+  .lancio .l1 .s{font-size:12px;color:#fff3dc;margin-top:6px}
+  .lancio .l2{display:grid;gap:8px;align-content:center}
+  .lancio .riga{font-size:13.5px;color:#41525a;display:flex;gap:10px;align-items:flex-start}
+  .lancio .riga b{color:var(--pet)}
+  .lancio .ok,.lancio .no{flex:none;width:22px;height:22px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;color:#fff;background:#1f7a53}
+  .lancio .no{background:#b5534a}
+  .fasi{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+  .fase{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;break-inside:avoid}
+  .fh{display:flex;gap:12px;align-items:center;background:var(--c);color:#fff;padding:12px 14px}
+  .fn{flex:none;width:30px;height:30px;border-radius:50%;background:rgba(255,255,255,.2);border:2px solid rgba(255,255,255,.6);display:flex;align-items:center;justify-content:center;font-weight:800}
+  .ft{font-weight:800;font-size:15px}.fq{font-size:11.5px;opacity:.85}
+  .fc{padding:10px 14px 4px}.fc.tu{background:#fbfaf6;border-top:1px dashed var(--line);padding-bottom:10px}
+  .fl{font-size:10px;letter-spacing:1px;text-transform:uppercase;font-weight:800;color:var(--oro2);margin-bottom:4px}
+  .fc ul{padding-left:16px;font-size:12.8px;color:#41525a}.fc li{margin:3px 0}.fc li b{color:var(--pet)}
+  table.controllo td{font-size:13px;vertical-align:top}
+  .checklist{display:grid;grid-template-columns:1fr 1fr;gap:8px 18px;margin-top:12px}
+  .ci{display:flex;gap:10px;align-items:flex-start;font-size:13.5px;color:#41525a;padding:8px 0;border-bottom:1px solid var(--line)}
+  .ci .box{flex:none;width:16px;height:16px;border:2px solid var(--oro);border-radius:4px;margin-top:2px}
+  .impegni{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+  .imp{background:var(--tile);border:1px solid var(--line);border-radius:14px;padding:16px 14px;font-size:12.5px;color:var(--mut);display:flex;flex-direction:column;gap:6px}
+  .imp b{color:var(--pet);font-size:14px}
+  .imp .ic{width:38px;height:38px;border-radius:12px;background:var(--pet);color:var(--oro);display:flex;align-items:center;justify-content:center;font-size:18px}
   .intro{font-size:14.5px;color:#41525a;margin-bottom:4px}
   .intro b{color:var(--pet)}
   .kv{display:grid;grid-template-columns:200px 1fr;gap:0;margin-top:6px}
@@ -19004,8 +19332,18 @@ const RV_CSS = `<style>
   .cover .marchio{font-size:17px;letter-spacing:1.5px}
   .cover-kick{margin-left:auto;font-size:11.5px;letter-spacing:2px;text-transform:uppercase;color:var(--oro2);font-weight:700}
   .cover-mid{margin:auto 0;position:relative;z-index:1}
-  .cover-h{font-size:48px;line-height:1.14;font-weight:800;letter-spacing:-.5px;color:var(--oro)}
-  .cover-bottom{position:relative;z-index:1;border-top:1px solid rgba(255,255,255,.16);padding-top:20px}
+  .cover-casa{position:absolute;right:30px;top:90px;width:46%;max-width:400px;opacity:.9;z-index:0}
+  .cover-pre{font-size:12px;letter-spacing:3px;text-transform:uppercase;color:var(--oro2);font-weight:800;margin-bottom:14px}
+  .cover-h{font-family:'Playfair Display',Georgia,serif;font-size:58px;line-height:1.06;font-weight:700;letter-spacing:-.5px;color:#fff}
+  .cover-h em{color:var(--oro);font-style:italic}
+  .cover-capitoli{display:flex;flex-wrap:wrap;gap:8px;margin-top:26px}
+  .cover-capitoli span{border:1px solid rgba(198,167,119,.5);color:#eaddc0;border-radius:99px;padding:6px 13px;font-size:11.5px;font-weight:700}
+  .cover-bottom{display:flex;justify-content:space-between;align-items:flex-end;gap:20px}
+  .cb-cons{display:flex;gap:12px;align-items:center;background:rgba(255,255,255,.06);border:1px solid rgba(198,167,119,.35);border-radius:16px;padding:10px 16px 10px 10px}
+  .cb-cons img,.cb-cons .ini{width:58px;height:58px;border-radius:50%;object-fit:cover;border:2px solid var(--oro);flex:none}
+  .cb-cons .ini{display:flex;align-items:center;justify-content:center;background:var(--oro);color:var(--pet);font-weight:800;font-size:18px}
+  .cb-cons .tel{font-size:12.5px;color:#bcd6df;margin-top:2px}
+  .cover-bottom{position:relative;z-index:1;border-top:1px solid rgba(255,255,255,.16);padding-top:20px;display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap}
   .cover-bottom .e{font-size:10.5px;text-transform:uppercase;letter-spacing:1px;color:var(--oro2);font-weight:800}
   .cover-bottom .v{font-size:21px;font-weight:800;margin-top:4px}
   .cover-bottom .v2{font-size:15px;font-weight:700;margin-top:3px;color:#eaf2f5}
@@ -19014,12 +19352,17 @@ const RV_CSS = `<style>
     .kv{grid-template-columns:1fr}.kv .k{padding-bottom:2px;border-bottom:none}.kv .val{padding-top:0}
     .trefasce,.zonastat{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}
     .intesta h1{font-size:21px}.big{font-size:32px}.tbl-scroll{overflow-x:auto}table{min-width:520px}
-    .cover-h{font-size:31px}.cover{padding:32px 24px;margin:12px}
+    .cover-h{font-size:36px}.cover{padding:32px 24px;margin:12px}.cover-casa{width:60%;top:70px;opacity:.35}
+    .h-grid,.lancio,.fasi,.checklist{grid-template-columns:1fr}.impegni{grid-template-columns:1fr 1fr}
+    .parte .pt{font-size:27px}.sintesi h1{font-size:25px}h2{font-size:21px}
   }
   @media print{
     body{background:#fff}.stampa{display:none}
     .wrap{max-width:none;padding:0}
-    .card,.valuta,.intesta{break-inside:avoid;box-shadow:none}
+    .card,.valuta,.intesta,.sintesi{break-inside:avoid;box-shadow:none}
+    .parte{break-before:page;box-shadow:none;margin-top:0}
+    .card.lunga{break-inside:auto}.card.lunga .kpi,.card.lunga .chart,.card.lunga table{break-inside:avoid}
+    .sintesi{box-shadow:none}
     @page{size:A4;margin:9mm}@page cover{size:A4;margin:0}
     .cover{page:cover;max-width:none;width:100%;min-height:297mm;height:297mm;border-radius:0;margin:0;padding:42px 38px;break-after:page;box-shadow:none}
   }
