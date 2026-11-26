@@ -18694,7 +18694,7 @@ async function costruisciReportValutazione(id) {
   const scelti = (Array.isArray(v.comparabili) ? v.comparabili : []).map(c => ({ ...c, p: Number(c.prezzo) || 0, m: Number(c.mq) || 0 }))
     .filter(c => c.p > 0 && c.m > 0).map(c => ({ ...c, ppm: c.p / c.m, venduto: /vendut|rogit|compravend|transat/i.test((c.tipo || '') + ' ' + (c.fonte || '')) }));
   const scVend = scelti.filter(c => c.venduto), scAnn = scelti.filter(c => !c.venduto);
-  if (mq && scVend.length >= 3) metodi.push(['Compravenduti in zona', `${scVend.length} vendite concluse, 1° e 3° quartile × ${n(mq)} m²`, rvQuantile(scVend.map(c => c.ppm), 0.25) * mq, rvQuantile(scVend.map(c => c.ppm), 0.75) * mq]);
+  if (mq && scVend.length >= 3) metodi.push(['Compravenduti (Agenzia Entrate)', `${scVend.length} atti di vendita in zona, 1° e 3° quartile × ${n(mq)} m²`, rvQuantile(scVend.map(c => c.ppm), 0.25) * mq, rvQuantile(scVend.map(c => c.ppm), 0.75) * mq]);
   // se il consulente ha scelto almeno 3 annunci simili, quelli prendono il posto dei comparabili automatici
   const compsAuto = comps;
   const compsUsati = scAnn.length >= 3 ? scAnn.map(c => ({ via: c.via, civico: c.civico, titolo: '', link: c.link || '', p: c.p, m: c.m, ppm: Math.round(c.ppm) })) : compsAuto;
@@ -19006,14 +19006,15 @@ async function costruisciReportValutazione(id) {
 
   /* 9b. Case di confronto scelte dal consulente */
   if (scVend.length) {
-    const riga = c => `<tr><td>${c.link ? `<a class="clink" href="${esc(c.link)}" target="_blank" rel="noopener">` : ''}${esc([c.via, c.civico].filter(Boolean).join(' '))}${c.link ? ' <span class="ext">&#8599;</span></a>' : ''}${c.data ? `<br><span class="tabnote" style="margin:0">${c.venduto ? 'venduto' : 'annuncio'} ${esc(c.data)}</span>` : ''}</td><td class="num">${n(c.p)} €</td><td class="num">${n(c.m)}</td><td class="num">${n(Math.round(c.ppm))}</td></tr>`;
+    const riga = c => `<tr><td>${c.link ? `<a class="clink" href="${esc(c.link)}" target="_blank" rel="noopener">` : ''}${esc([c.via, c.civico].filter(Boolean).join(' '))}${c.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(c.p)} €</td><td class="num">${n(c.m)}</td><td class="num">${n(Math.round(c.ppm))}</td></tr>`;
     const tab = (L, tit) => `<div class="sub">${tit}</div><div class="tbl-scroll"><table><thead><tr><th>Immobile</th><th class="num">Prezzo</th><th class="num">m²</th><th class="num">€/m²</th></tr></thead><tbody>${L.map(riga).join('')}</tbody></table></div>`;
     const fascia = L => L.length ? `${n(Math.round(Math.min(...L.map(c => c.ppm))))}–${n(Math.round(Math.max(...L.map(c => c.ppm))))} €/m²` : '';
-    let intro = `Le vendite già concluse più simili a ${laCasa} per zona e dimensione, selezionate dal consulente.`;
+    let intro = `Cosa si è venduto davvero vicino a ${laCasa}: le compravendite più simili per zona e dimensione, con i prezzi dichiarati negli atti all'<b>Agenzia delle Entrate</b>.`;
     intro += ` Le <b>${scVend.length} vendite</b> sono state chiuse tra <b>${fascia(scVend)}</b>.`;
     if (valPpm) intro += ` ${laCasa.charAt(0).toUpperCase() + laCasa.slice(1)} è valutato circa <b>${n(rvTondo(valPpm, 10))} €/m²</b>.`;
-    sezioni.push(card('Compravenduti in zona', intro,
-      tab(scVend, 'Vendite concluse vicino a ' + laCasa) + `<p class="tabnote">Prezzi effettivi di vendita ricavati dalle banche dati delle compravendite.</p>`));
+    sezioni.push(card('Compravenduti in zona · Agenzia delle Entrate', intro,
+      tab(scVend, 'Compravendite vicino a ' + laCasa) + `<p class="tabnote">Prezzi effettivi di vendita dichiarati negli atti notarili (Agenzia delle Entrate – OMI, valori immobiliari dichiarati). Superfici e indirizzi come riportati negli atti.</p>`));
+    fonti.push('Agenzia delle Entrate — OMI, valori immobiliari dichiarati negli atti di compravendita (selezione del consulente)');
   }
 
   /* 10. Comparabili */
@@ -19329,6 +19330,57 @@ ${sezioni.join('')}
     Valutazione a uso della proprietà — i valori indicati sono una stima di mercato e non costituiscono perizia giurata.
   </div>
 </div>
+<script>
+/* Pagine con poco contenuto: in stampa il blocco viene centrato in verticale.
+   Si simula l'impaginazione A4 (area utile 279 mm) sui blocchi della pagina. */
+(function(){
+  var MM = 96 / 25.4, H = 279 * MM - 6;
+  function pulisci(){ document.querySelectorAll('.spazio-stampa').forEach(function(x){ x.remove(); }); document.documentElement.classList.remove('simstampa'); }
+  function centra(){
+    pulisci();
+    document.documentElement.classList.add('simstampa');
+    var wrap = document.querySelector('.wrap'); if (!wrap) return;
+    var el = Array.prototype.slice.call(wrap.children).filter(function(x){ return x.offsetHeight > 0; });
+    var pagine = [], cur = null;
+    function nuova(sicura){ cur = { el: [], usato: 0, sicura: sicura }; pagine.push(cur); }
+    nuova(true);
+    el.forEach(function(x){
+      var cs = getComputedStyle(x), mt = parseFloat(cs.marginTop) || 0, h = x.offsetHeight;
+      if (x.classList.contains('parte') && cur.el.length) nuova(true);
+      var conMargine = cur.el.length ? mt : 0;
+      var lunga = x.classList.contains('lunga');
+      if (lunga && cur.usato + conMargine + h > H) {   // la card lunga si spezza tra i suoi blocchi interni
+        var top = cur.usato + conMargine, figli = Array.prototype.slice.call(x.children), base = 0;
+        cur.el.push(x); cur.sicura = false;
+        figli.forEach(function(f){
+          var fondo = f.offsetTop + f.offsetHeight;
+          if (top + fondo - base > H && f.offsetTop > base) { nuova(true); cur.el.push(x); cur.sicura = false; top = 0; base = f.offsetTop; }
+        });
+        cur.usato = top + h - base; return;
+      }
+      if (cur.el.length && cur.usato + conMargine + h > H) { nuova(true); conMargine = 0; }
+      if (h > H) {                         // blocco più alto di una pagina: si spezza, da qui non si centra fino alla prossima parte
+        cur.el.push(x); cur.sicura = false;
+        var resto = h - (H - cur.usato);
+        while (resto > H) { nuova(false); resto -= H; }
+        nuova(false); cur.usato = resto; cur.el.push(x); return;
+      }
+      cur.el.push(x); cur.usato += conMargine + h;
+    });
+    pagine.forEach(function(pg, i){
+      if (!pg.sicura || !pg.el.length || i === pagine.length - 1 || pg.el[0].classList.contains('parte')) return;
+      var libero = H - pg.usato;
+      if (pg.usato < H * 0.8 && libero > 150) {
+        var d = document.createElement('div'); d.className = 'spazio-stampa'; d.style.height = Math.floor(libero / 2 - 24) + 'px'; d.style.breakBefore = 'page'; d.style.breakAfter = 'avoid';
+        pg.el[0].parentNode.insertBefore(d, pg.el[0]);
+      }
+    });
+  }
+  window.addEventListener('beforeprint', centra);
+  window.addEventListener('afterprint', pulisci);
+  if (/[?&]stampa=1/.test(location.search)) window.addEventListener('load', centra);
+})();
+</script>
 </body>
 </html>`;
   return html;
@@ -19414,10 +19466,10 @@ const RV_CSS = `<style>
   .imp .ic{width:38px;height:38px;border-radius:12px;background:var(--pet);color:var(--oro);display:flex;align-items:center;justify-content:center;font-size:18px}
   .intro{font-size:14.5px;color:#41525a;margin-bottom:4px}
   .intro b{color:var(--pet)}
-  .kv{display:grid;grid-template-columns:200px 1fr;gap:0;margin-top:6px}
-  .kv > div{padding:11px 4px;border-bottom:1px solid var(--line);font-size:14px}
+  .kv{display:grid;grid-template-columns:132px 1fr 132px 1fr;column-gap:14px;margin-top:6px}
+  .kv > div{padding:8px 4px;border-bottom:1px solid var(--line);font-size:13px;line-height:1.45}
   .kv .k{color:var(--mut);font-weight:700}
-  .kv > div:nth-last-child(-n+2){border-bottom:none}
+  .kv > div:nth-last-child(-n+4){border-bottom:none}
   table{width:100%;border-collapse:collapse;margin-top:6px;font-size:13.5px}
   th{background:var(--pet);color:#fff;text-align:left;padding:10px 12px;font-weight:700;font-size:12px;text-transform:uppercase;letter-spacing:.4px}
   th:first-child{border-radius:10px 0 0 0}th:last-child{border-radius:0 10px 0 0}
@@ -19451,6 +19503,7 @@ const RV_CSS = `<style>
   .passo .n{flex:none;width:30px;height:30px;border-radius:50%;background:var(--pet);color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center}
   .passo .tx{font-size:14px;color:#41525a}
   .passo .tx b{color:var(--pet)}
+  html.simstampa .wrap{max-width:none;width:192mm;padding:0;margin:0}
   .fonti{font-size:12.5px;color:var(--mut);line-height:1.75}
   .piede{text-align:center;color:var(--mut);font-size:12px;margin-top:26px;line-height:1.8}
   .piede b{color:var(--pet)}
@@ -19504,6 +19557,7 @@ const RV_CSS = `<style>
     .parte{break-before:page;box-shadow:none;margin-top:0}
     .card.lunga{break-inside:auto}.card.lunga .kpi,.card.lunga .chart,.card.lunga table{break-inside:avoid}
     .sintesi{box-shadow:none}
+    .fonti{font-size:10.5px;line-height:1.55;padding:14px 18px}.piede{margin-top:10px;font-size:10.5px;line-height:1.5}
     @page{size:A4;margin:9mm}@page cover{size:A4;margin:0}
     .cover{page:cover;max-width:none;width:100%;min-height:297mm;height:297mm;border-radius:0;margin:0;padding:42px 38px;break-after:page;box-shadow:none}
   }
