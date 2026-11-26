@@ -18689,12 +18689,20 @@ async function costruisciReportValutazione(id) {
   const ppmRit = rvMediana(ritirati.map(r => r.ppm));
   const ppmRitCat = rvMediana(ritCat.map(r => r.ppm));
 
-  /* ---------- metodi di stima */
   const metodi = [];
+  /* comparabili e compravenduti scelti dal consulente (campo comparabili della scheda Valutazione) */
+  const scelti = (Array.isArray(v.comparabili) ? v.comparabili : []).map(c => ({ ...c, p: Number(c.prezzo) || 0, m: Number(c.mq) || 0 }))
+    .filter(c => c.p > 0 && c.m > 0).map(c => ({ ...c, ppm: c.p / c.m, venduto: /vendut|rogit|compravend|transat/i.test((c.tipo || '') + ' ' + (c.fonte || '')) }));
+  const scVend = scelti.filter(c => c.venduto), scAnn = scelti.filter(c => !c.venduto);
+  if (mq && scVend.length >= 3) metodi.push(['Compravenduti in zona', `${scVend.length} vendite concluse, 1° e 3° quartile × ${n(mq)} m²`, rvQuantile(scVend.map(c => c.ppm), 0.25) * mq, rvQuantile(scVend.map(c => c.ppm), 0.75) * mq]);
+  // se il consulente ha scelto almeno 3 annunci simili, quelli prendono il posto dei comparabili automatici
+  const compsAuto = comps;
+  const compsUsati = scAnn.length >= 3 ? scAnn.map(c => ({ via: c.via, civico: c.civico, titolo: '', link: c.link || '', p: c.p, m: c.m, ppm: Math.round(c.ppm) })) : compsAuto;
+  /* ---------- metodi di stima */
   if (mq && omiMin && omiMax) metodi.push(['Quotazioni OMI' + (zonaCasa ? ' · zona ' + zonaCasa.zona : ''), (coeffStatoOmi[0] !== 1 ? 'adattate allo stato, ' : 'stato normale, ') + n(mq) + ' m²', omiMin * coeffStatoOmi[0] * mq, omiMax * coeffStatoOmi[1] * mq]);
   const baseAnn = stessaCat.length >= 5 ? stessaCat : attivi;
   if (mq && baseAnn.length >= 5) metodi.push([`Annunci a ${titoloComune}`, `${baseAnn === stessaCat ? categoria.toLowerCase() : 'tutti gli annunci'}, 1° e 3° quartile × ${n(mq)} m²`, rvQuantile(baseAnn.map(r => r.ppm), 0.25) * mq, rvQuantile(baseAnn.map(r => r.ppm), 0.75) * mq]);
-  if (mq && comps.length >= 3) { const pp = comps.map(r => r.ppm); metodi.push(['Comparabili più simili', `${comps.length} annunci, ${rvPct(scontoMedio, 0)} di trattativa`, Math.min(...pp) * mq * (1 + scontoMedio / 100), Math.max(...pp) * mq * (1 + scontoMedio / 100)]); }
+  if (mq && compsUsati.length >= 3) { const pp = compsUsati.map(r => r.ppm); metodi.push([compsUsati === compsAuto ? 'Comparabili più simili' : 'Comparabili scelti dal consulente', `${compsUsati.length} annunci, ${rvPct(scontoMedio, 0)} di trattativa`, Math.min(...pp) * mq * (1 + scontoMedio / 100), Math.max(...pp) * mq * (1 + scontoMedio / 100)]); }
   const baseRit = ritCat.length >= 5 ? ritCat : ritirati;
   if (mq && baseRit.length >= 5) metodi.push(['Usciti dal mercato', `${baseRit.length} annunci ritirati, quartili, ${rvPct(scontoMedio, 0)}`, rvQuantile(baseRit.map(r => r.ppm), 0.25) * mq * (1 + scontoMedio / 100), rvQuantile(baseRit.map(r => r.ppm), 0.75) * mq * (1 + scontoMedio / 100)]);
   if (vMin && vMax) metodi.push(['Stima Forte a coefficienti', 'prezzo base di zona × caratteristiche', vMin, vMax]);
@@ -18996,10 +19004,22 @@ async function costruisciReportValutazione(id) {
     sezioni.push(card('Cosa si è venduto', intro, corpo, 'lunga'));
   }
 
+  /* 9b. Case di confronto scelte dal consulente */
+  if (scVend.length) {
+    const riga = c => `<tr><td>${c.link ? `<a class="clink" href="${esc(c.link)}" target="_blank" rel="noopener">` : ''}${esc([c.via, c.civico].filter(Boolean).join(' '))}${c.link ? ' <span class="ext">&#8599;</span></a>' : ''}${c.data ? `<br><span class="tabnote" style="margin:0">${c.venduto ? 'venduto' : 'annuncio'} ${esc(c.data)}</span>` : ''}</td><td class="num">${n(c.p)} €</td><td class="num">${n(c.m)}</td><td class="num">${n(Math.round(c.ppm))}</td></tr>`;
+    const tab = (L, tit) => `<div class="sub">${tit}</div><div class="tbl-scroll"><table><thead><tr><th>Immobile</th><th class="num">Prezzo</th><th class="num">m²</th><th class="num">€/m²</th></tr></thead><tbody>${L.map(riga).join('')}</tbody></table></div>`;
+    const fascia = L => L.length ? `${n(Math.round(Math.min(...L.map(c => c.ppm))))}–${n(Math.round(Math.max(...L.map(c => c.ppm))))} €/m²` : '';
+    let intro = `Le vendite già concluse più simili a ${laCasa} per zona e dimensione, selezionate dal consulente.`;
+    intro += ` Le <b>${scVend.length} vendite</b> sono state chiuse tra <b>${fascia(scVend)}</b>.`;
+    if (valPpm) intro += ` ${laCasa.charAt(0).toUpperCase() + laCasa.slice(1)} è valutato circa <b>${n(rvTondo(valPpm, 10))} €/m²</b>.`;
+    sezioni.push(card('Compravenduti in zona', intro,
+      tab(scVend, 'Vendite concluse vicino a ' + laCasa) + `<p class="tabnote">Prezzi effettivi di vendita ricavati dalle banche dati delle compravendite.</p>`));
+  }
+
   /* 10. Comparabili */
-  if (comps.length) {
-    const righe = comps.map(r => `<tr><td>${r.link ? `<a class="clink" href="${esc(r.link)}" target="_blank" rel="noopener">` : ''}${esc(r.titolo || [r.via, r.civico].filter(Boolean).join(' '))}${r.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(r.p)} €</td><td class="num">${n(r.m)}</td><td class="num">${n(r.ppm)}</td></tr>`).join('');
-    const pp = comps.map(r => r.ppm);
+  if (compsUsati.length) {
+    const righe = compsUsati.map(r => `<tr><td>${r.link ? `<a class="clink" href="${esc(r.link)}" target="_blank" rel="noopener">` : ''}${esc(r.titolo || [r.via, r.civico].filter(Boolean).join(' '))}${r.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(r.p)} €</td><td class="num">${n(r.m)}</td><td class="num">${n(r.ppm)}</td></tr>`).join('');
+    const pp = compsUsati.map(r => r.ppm);
     sezioni.push(card('Comparabili in vendita',
       `Gli annunci più simili a ${laCasa} per tipologia e superficie sono proposti tra <b>${n(Math.min(...pp))} e ${n(Math.max(...pp))} €/m²</b>. I metri quadri sono quelli dichiarati negli annunci.`,
       `<div class="tbl-scroll"><table><thead><tr><th>Immobile</th><th class="num">Prezzo</th><th class="num">m²</th><th class="num">€/m²</th></tr></thead><tbody>${righe}</tbody></table></div>
@@ -19016,7 +19036,7 @@ async function costruisciReportValutazione(id) {
     }
     // posizionamento
     if (vCons) {
-      const items = comps.map(r => [r.via ? (r.via.charAt(0).toUpperCase() + r.via.slice(1)) : (r.titolo || '').slice(0, 26), `${n(r.m)} m² · ${n(r.ppm)} €/m²`, r.p, false]);
+      const items = compsUsati.map(r => [r.via ? (r.via.charAt(0).toUpperCase() + r.via.slice(1)) : (r.titolo || '').slice(0, 26), `${n(r.m)} m² · ${n(r.ppm)} €/m²`, r.p, false]);
       items.push([Questa.replace(/^Questo |^Questa /, (x) => x), `${n(mq)} m² · ${n(rvTondo(valPpm, 10))} €/m²`, vCons, true]);
       items.sort((a, b) => a[2] - b[2]);
       sezioni.push(card('Posizionamento di mercato',
