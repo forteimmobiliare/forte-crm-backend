@@ -18930,6 +18930,7 @@ async function costruisciReportValutazione(id) {
   }
 
   if (valuta) sezioni.push(valuta);
+  sezioni.push('<!--SINTESI-->');   // il riepilogo del prezzo sta qui, con le altre sezioni del prezzo
 
   /* ================================================================ PARTE 3 · IL PIANO PER IL MIGLIOR PREZZO */
   sezioni.push(parte('3', 'Come arriviamo al <span>miglior prezzo</span>', `Il metodo Forte Immobiliare: prezzo di lancio, domanda già pronta, Evento Casa Forte e Sessione Proposte. Le fasi, i tempi e cosa ricevi ogni settimana.`));
@@ -19095,8 +19096,6 @@ async function costruisciReportValutazione(id) {
   const firma = cons ? `<br>Il tuo consulente: <b>${esc(cons.nomeCognome)}</b>${(cons.telefonoPubblico || cons.telefono) ? ' · ' + esc(cons.telefonoPubblico || cons.telefono) : ''}` : '';
 
   /* ---------------- pagina "In sintesi" */
-  const hero = [];
-  if (vCons) hero.push(`<div class="h-val"><div class="e">Valore più probabile</div><div class="p">€ ${n(vCons)}</div><div class="s">fascia ${n(vMin)} – ${n(vMax)} €${valPpm ? ` · ${n(rvTondo(valPpm, 10))} €/m²` : ''}</div></div>`);
   const tile = (v1, e, cls) => `<div class="h-t${cls ? ' ' + cls : ''}"><div class="v">${v1}</div><div class="e">${e}</div></div>`;
   const piccoli = [];
   if (lancio) piccoli.push(tile('€ ' + n(lancio), 'prezzo di lancio<br>consigliato', 'oro'));
@@ -19115,19 +19114,16 @@ async function costruisciReportValutazione(id) {
   if (vUnAnno != null && sV) punti.push(`<b>Il mercato.</b> A ${esc(titoloComune)} i prezzi richiesti sono ${vUnAnno >= 1 ? 'in crescita' : vUnAnno <= -1 ? 'in calo' : 'stabili'} (${rvPct(vUnAnno)} in un anno), oggi in media ${n(ultimo(sV))} €/m².`);
   if (vCons && metodi.length >= 2) punti.push(`<b>Il valore.</b> ${metodi.length} metodi indipendenti (OMI, annunci, comparabili, venduto) confermano una fascia tra ${n(vMin)} e ${n(vMax)} €.`);
   if (lancio) punti.push(`<b>La strategia.</b> Lancio a ${n(lancio)} €, Evento Casa Forte in 3ª settimana e Sessione Proposte entro la 5ª, per mettere gli acquirenti in competizione.`);
-  const sintesi = `
-  <div class="sintesi">
-    <div class="s-top"><div class="marchio">FORTE <span>IMMOBILIARE</span></div><div class="s-kick">In sintesi</div></div>
-    <h1>${esc(indirizzoCompleto)}</h1>
-    <div class="riga">
-      <span>${esc(v.tipologia || 'Immobile')}${v.locali ? ' · ' + esc(v.locali) + ' locali' : ''}${mq ? ' · <b>' + n(mq) + ' m²</b>' : ''}</span>
-      ${v.stato ? `<span>Stato: <b>${esc(v.stato)}</b></span>` : ''}
-      <span>Data: <b>${dataIt}</b></span>
-    </div>
-    <div class="h-grid">${hero.join('')}<div class="h-piccoli">${piccoli.join('')}</div></div>
+  const sintesi = (piccoli.length || punti.length || gauge) ? `
+  <div class="card sintesi-prezzo">
+    <div class="kick">Quanto vale ${laCasa} · in sintesi</div>
+    <h2>Valore, prezzo di lancio e strategia</h2>
+    ${piccoli.length ? `<div class="h-piccoli quattro">${piccoli.join('')}</div>` : ''}
     ${punti.length ? `<div class="punti">${punti.map(x => `<div class="pt">${x}</div>`).join('')}</div>` : ''}
-  </div>
-  ${gauge ? `<div class="card">${gauge}</div>` : ''}`;
+    ${gauge ? `<div style="margin-top:18px">${gauge}</div>` : ''}
+  </div>` : '';
+  const iS = sezioni.indexOf('<!--SINTESI-->');
+  if (iS >= 0) sezioni[iS] = sintesi;
 
   const casaSvg = `<svg class="cover-casa" viewBox="0 0 420 360" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><g fill="none" stroke="#C6A777" stroke-linejoin="round" stroke-linecap="round">
     <path d="M30 330 H390" stroke-width="2" opacity=".5"/>
@@ -19178,7 +19174,6 @@ ${RV_CSS}
     </div>
   </div>
 <div class="wrap">
-${sintesi}
 ${sezioni.join('')}
   <div class="card fonti">
     <b style="color:var(--txt);">Fonti</b><br>
@@ -19242,6 +19237,7 @@ const RV_CSS = `<style>
   .h-t.up .v{color:#1f7a53}.h-t.down .v{color:#b5534a}
   .h-t.oro{background:linear-gradient(145deg,#f6efe2,#efe2c7);border-color:#e6d2a4}.h-t.oro .v{color:#7a5f2c}
   .h-t .e{font-size:10.5px;color:var(--mut);font-weight:700;margin-top:3px;line-height:1.35}
+  .h-piccoli.quattro{grid-template-columns:repeat(4,1fr);margin-top:14px}
   .punti{margin-top:18px;display:grid;gap:8px}
   .punti .pt{font-size:14px;color:#41525a;padding:10px 14px;border-left:3px solid var(--oro);background:#fbfaf6;border-radius:0 10px 10px 0}
   .punti .pt b{color:var(--pet)}
@@ -19353,7 +19349,7 @@ const RV_CSS = `<style>
     .trefasce,.zonastat{grid-template-columns:1fr}.kpi{grid-template-columns:1fr 1fr}
     .intesta h1{font-size:21px}.big{font-size:32px}.tbl-scroll{overflow-x:auto}table{min-width:520px}
     .cover-h{font-size:36px}.cover{padding:32px 24px;margin:12px}.cover-casa{width:60%;top:70px;opacity:.35}
-    .h-grid,.lancio,.fasi,.checklist{grid-template-columns:1fr}.impegni{grid-template-columns:1fr 1fr}
+    .h-grid,.lancio,.fasi,.checklist{grid-template-columns:1fr}.impegni,.h-piccoli.quattro{grid-template-columns:1fr 1fr}
     .parte .pt{font-size:27px}.sintesi h1{font-size:25px}h2{font-size:21px}
   }
   @media print{
