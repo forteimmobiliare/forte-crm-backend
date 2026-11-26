@@ -9897,6 +9897,59 @@ function _fonteDaEtichette(etichette) {
 
 /* Il giro completo. Ogni passo lascia una riga nel diario: se il messaggio
    non parte lo si scopre da li', non dal cliente che non richiama. */
+/* RIEPILOGO TELEFONATA DI IMMOBILIARE.IT. Il Telefono Smart manda una mail
+   "ha ricevuto una telefonata" per ogni chiamata dagli annunci. Se la chiamata
+   ha gia' la sua riga (Giulia o telefonata presa a mano) la mail non deve
+   diventare una seconda richiesta: si aggancia sotto la riga della chiamata. */
+const RE_MAIL_TELEFONATA = /ricevuto una telefonata/i;
+function riepilogoMailTelefonata(testo) {
+  const t = String(testo || '').replace(/&#178;/g, '²').replace(/&#039;/g, "'").replace(/\s+/g, ' ');
+  const pesca = re => { const m = t.match(re); return m ? m[1].trim() : ''; };
+  const giorno = pesca(/Giorno (\d{1,2}\/\d{1,2}\/\d{2,4})/i), ora = pesca(/Ora (\d{1,2}[:.]\d{2})/i);
+  const numero = pesca(/telefonata al numero (\+?[\d ]{6,20}?) Giorno/i);
+  const durata = pesca(/durata (\d+ \w+)/i);
+  const esito = /Non risposta/i.test(t) ? 'non risposta' : durata ? 'risposta, durata ' + durata : (/Risposta/i.test(t) ? 'risposta' : '');
+  const rif = pesca(/Rif\. ([A-Z]{1,3}-?\d+[A-Z\-]*)/);
+  const nome = [pesca(/Contatto (\S+) NOME/i), pesca(/NOME (\S+(?: \S+)?) COGNOME/i)].filter(Boolean).join(' ');
+  const email = pesca(/(\S+@\S+\.\w+) EMAIL/i);
+  const testoRiga = '📞 Riepilogo Immobiliare.it: telefonata' + (giorno ? ' del ' + giorno : '') + (ora ? ' alle ' + ora : '')
+    + (numero ? ' al ' + numero : '') + (esito ? ' — ' + esito : '') + (rif ? ' · Rif. ' + rif : '')
+    + (nome ? ' · ' + nome : '') + (email ? ' · ' + email : '');
+  return { testoRiga, nome, email, rif };
+}
+const _reTel9 = tel => { const c = String(tel || '').replace(/\D/g, '').slice(-9); return c.length >= 8 ? new RegExp(c.split('').join('[\\s.\\-]*') + '$') : null; };
+/* mette il riepilogo sotto la riga della chiamata; se la mail aveva gia' la sua
+   riga, la toglie (la scheda Banca Dati nata da li' passa alla chiamata) */
+async function agganciaMailTelefonata(rigaTel, testoMail, idGmail, rigaMail) {
+  const r = riepilogoMailTelefonata(testoMail);
+  if (!String(rigaTel.messaggioCliente || '').includes(r.testoRiga))
+    rigaTel.messaggioCliente = (String(rigaTel.messaggioCliente || '').trim() + '\n\n' + r.testoRiga).trim();
+  if (r.nome && nomeVuotoRichiesta(rigaTel.nome)) rigaTel.nome = r.nome;
+  if (r.email && !rigaTel.emailCliente) rigaTel.emailCliente = r.email;
+  const codice = codiceIF(r.rif);
+  if (codice && !rigaTel.riferimentoImmobile) rigaTel.riferimentoImmobile = codice;
+  if (rigaMail) {
+    if (!rigaTel.consulente && rigaMail.consulente) rigaTel.consulente = rigaMail.consulente;
+    if (!rigaTel.riferimentoImmobile && rigaMail.riferimentoImmobile) rigaTel.riferimentoImmobile = rigaMail.riferimentoImmobile;
+    if (!rigaTel.incaricoCollegatoId && rigaMail.incaricoCollegatoId) rigaTel.incaricoCollegatoId = rigaMail.incaricoCollegatoId;
+  }
+  if (idGmail && !rigaTel.idMailOrigine) rigaTel.idMailOrigine = idGmail;
+  rigaTel.markModified && rigaTel.markModified('messaggioCliente');
+  await rigaTel.save();
+  if (rigaMail) {
+    const idMail = String(rigaMail._id), idTel = String(rigaTel._id);
+    const giaScheda = await BancaDati.findOne({ centralinoOrigineId: idTel }).catch(() => null);
+    const schede = await BancaDati.find({ centralinoOrigineId: idMail }).catch(() => []);
+    for (const b of schede) {
+      const visite = await Visioni.countDocuments({ bancaDatiOrigineId: String(b._id) }).catch(() => 1);
+      if (giaScheda && !visite) await BancaDati.deleteOne({ _id: b._id }).catch(() => {});
+      else { b.centralinoOrigineId = idTel; await b.save().catch(() => {}); }
+    }
+    await Centralino.deleteOne({ _id: rigaMail._id }).catch(() => {});
+  }
+  return r;
+}
+
 async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, casellaGmail) {
   const impostazioni = await impostazioniLead();
 
@@ -9957,6 +10010,23 @@ async function lavoraMailLead(testo, mittente, oggetto, idGmail, etichette, case
     await segnaNelDiario('lead', 'scartato', 'immobile non deciso',
       'l\'indirizzo combacia con ' + destinazione.ambiguo + ': serve il codice IF o il civico',
       letto.nomePortale || mittente || '');
+  }
+
+  /* mail "ha ricevuto una telefonata": se la chiamata ha gia' la sua riga
+     (Giulia o presa a mano) la mail si aggancia li', niente riga nuova */
+  if (RE_MAIL_TELEFONATA.test(testo) && letto.telefono) {
+    const re = _reTel9(letto.telefono);
+    const rigaTel = re ? await Centralino.findOne({ telefonoCliente: re,
+      tipoRichiesta: { $in: ['Telefonata AI', 'Chiamata Richiesta Specifica'] },
+      createdAt: { $gte: new Date(Date.now() - 12 * 3600000) } }).sort({ createdAt: -1 }).catch(() => null) : null;
+    if (rigaTel) {
+      await agganciaMailTelefonata(rigaTel, testo, idGmail, null);
+      segnaMailLavorata(idGmail, true, casellaGmail);
+      segnaMailVista(idGmail, 'agganciata alla telefonata');
+      await segnaNelDiario('lead', 'saltato', 'riepilogo telefonata',
+        (letto.telefono || '') + ' — agganciato alla riga della chiamata', letto.nomePortale || mittente || '');
+      return { saltata: true, motivo: 'agganciata alla telefonata', id: String(rigaTel._id) };
+    }
   }
 
   /* Fonte: prima le etichette Gmail (le metti tu per portale), poi il modulo del
@@ -10437,6 +10507,16 @@ app.post('/api/voce/fine-chiamata', async (req, res) => {
     });
     chiamata.centralinoId = String(riga._id);
     chiamata.esito = 'creata';
+
+    /* la mail "ha ricevuto una telefonata" di Immobiliare.it arrivata prima
+       della fine chiamata: la porto sotto questa riga e tolgo la sua */
+    try {
+      const reT = _reTel9(telefono);
+      const mailPrima = reT ? await Centralino.find({ _id: { $ne: riga._id }, telefonoCliente: reT,
+        tipoRichiesta: { $in: ['Mail Richiesta Specifica', 'Avviso dal portale'] }, messaggioCliente: RE_MAIL_TELEFONATA,
+        createdAt: { $gte: new Date(Date.now() - 12 * 3600000) } }).catch(() => []) : [];
+      for (const m of mailPrima) await agganciaMailTelefonata(riga, m.messaggioCliente, m.idMailOrigine, m);
+    } catch (e) { console.error('Aggancio riepilogo Immobiliare non riuscito:', e.message); }
 
     const scenTg = await Scenario.findOne({ azione: 'telegram-consulente' }).catch(() => null);
     if (!scenTg || scenTg.attivo) {
@@ -12956,6 +13036,31 @@ app.get('/api/percorso-richieste', async (req, res) => {
       };
     });
     res.status(200).json(righe);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/* Sistema le coppie gia' in archivio: mail "ha ricevuto una telefonata" +
+   riga della chiamata (stesso numero, entro 12 ore) -> una riga sola.
+   ?prova=1 elenca soltanto. */
+app.post('/api/voce/unisci-riepiloghi', async (req, res) => {
+  try {
+    const giorni = Math.max(1, Math.min(60, parseInt(req.query.giorni, 10) || 14));
+    const prova = req.query.prova === '1';
+    const mails = await Centralino.find({ messaggioCliente: RE_MAIL_TELEFONATA,
+      tipoRichiesta: { $in: ['Mail Richiesta Specifica', 'Avviso dal portale'] },
+      createdAt: { $gte: new Date(Date.now() - giorni * 86400000) } }).sort({ createdAt: 1 });
+    const fatte = [];
+    for (const m of mails) {
+      const re = _reTel9(m.telefonoCliente); if (!re) continue;
+      const t = new Date(m.createdAt).getTime();
+      const tel = await Centralino.findOne({ telefonoCliente: re,
+        tipoRichiesta: { $in: ['Telefonata AI', 'Chiamata Richiesta Specifica'] },
+        createdAt: { $gte: new Date(t - 12 * 3600000), $lte: new Date(t + 12 * 3600000) } }).sort({ createdAt: -1 });
+      if (!tel) continue;
+      fatte.push({ telefono: m.telefonoCliente, nome: tel.nome, mail: String(m._id), chiamata: String(tel._id), immobile: tel.riferimentoImmobile || m.riferimentoImmobile || '' });
+      if (!prova) await agganciaMailTelefonata(tel, m.messaggioCliente, m.idMailOrigine, m);
+    }
+    res.status(200).json({ prova, unite: fatte.length, elenco: fatte });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
