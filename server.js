@@ -18551,6 +18551,7 @@ function rvNum(x) {
 const rvMediana = (a) => { if (!a.length) return 0; const b = a.slice().sort((x, y) => x - y); const m = Math.floor(b.length / 2); return b.length % 2 ? b[m] : (b[m - 1] + b[m]) / 2; };
 const rvQuantile = (a, q) => { if (!a.length) return 0; const b = a.slice().sort((x, y) => x - y); const p = (b.length - 1) * q; const lo = Math.floor(p), hi = Math.ceil(p); return b[lo] + (b[hi] - b[lo]) * (p - lo); };
 const rvNorm = (s) => String(s || '').trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ');
+const rvIso = (d) => { const t = String(d || '').trim(); let m = /^(\d{4})-(\d{2})-(\d{2})/.exec(t); if (m) return m[0]; m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(t); return m ? `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}` : ''; };
 const rvTondo = (v, passo) => Math.round(v / passo) * passo;
 const rvPct = (v, dec = 1) => (v > 0 ? '+' : '') + RV.n(v, dec) + '%';
 const RV_MESI = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno', 'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre'];
@@ -18603,8 +18604,8 @@ async function costruisciReportValutazione(id) {
     MercatoComune.find({ comune: new RegExp('^' + comuneNome.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$', 'i') }).sort({ anno: 1 }).lean(),
     Incarico.find({ statoImmobile: { $in: ['Rogitato', 'Prel Ok', 'Da Fare Prel', 'Vincolato'] } },
       { nome: 1, idElemento: 1, comune: 1, via: 1, civico: 1, mq: 1, prezzoIncarico: 1, prezzoValutazione: 1, statoImmobile: 1, tipologiaUnita: 1, locali: 1 }).lean(),
-    Proposta.find({ statoProposta: /accettata/i }, { incaricoUfficio: 1, prezzoProposta: 1, prezzoIncarico: 1 }).lean(),
-    Transazione.find({}, { incaricoUfficio: 1, prezzoVendita: 1 }).lean(),
+    Proposta.find({ statoProposta: /accettata/i }, { incaricoUfficio: 1, prezzoProposta: 1, prezzoIncarico: 1, dataPresaProposta: 1 }).lean(),
+    Transazione.find({}, { incaricoUfficio: 1, prezzoVendita: 1, dataRogito: 1 }).lean(),
     Consulente.find({}, { nomeCognome: 1, utente: 1, telefono: 1, mail: 1, telefonoPubblico: 1, fotoProfilo: 1, ruoloPubblico: 1 }).lean(),
     BancaDati.find({}, { comuniRicerca: 1, budgetAcquisto: 1, immobileFonteRichiesta: 1, nonContattare: 1, createdAt: 1 }).lean(),
     Visioni.find({}, { incaricoUfficio: 1, statoAdv: 1, dataVisione: 1 }).lean(),
@@ -18641,6 +18642,22 @@ async function costruisciReportValutazione(id) {
   /* ---------- la valutazione del consulente */
   let vCons = rvTondo(rvNum(v.valoreConsigliato), 1000), vMin = rvTondo(rvNum(v.valoreMinimo), 1000), vMax = rvTondo(rvNum(v.valoreMassimo), 1000);
 
+
+  /* ---------- paese e zona: la zona si legge dai titoli degli annunci ("…, San Domenico, Legnano") */
+  const zonaDaTitolo = (t) => { const pz = String(t || '').split(',').map(x => x.trim()).filter(Boolean); return pz.length >= 3 && !/^\d/.test(pz[pz.length - 2]) && rvNorm(pz[pz.length - 1]) === cc ? pz[pz.length - 2] : ''; };
+  const chiaveVia = (x) => rvNorm(String(x || '').split(',')[0]).replace(/\b\d+[a-z]?\b/g, '').replace(/^(via|viale|piazza|piazzale|corso|vicolo|largo|strada|v\.le|p\.za)\s+/, '').replace(/\s+/g, ' ').trim();
+  const zoneVie = {}, zoneUltima = {};
+  const conta = (o, k, z) => { if (!k) return; o[k] = o[k] || {}; o[k][z] = (o[k][z] || 0) + 1; };
+  annunci.forEach(r => { const z = zonaDaTitolo(r.titolo); if (!z) return; const k = chiaveVia(r.via); conta(zoneVie, k, z); conta(zoneUltima, k.split(' ').pop(), z); });
+  const piuFrequente = (o) => o ? Object.keys(o).sort((x, y) => o[y] - o[x])[0] : '';
+  const zonaDiVia = (via) => { const k = chiaveVia(via); return piuFrequente(zoneVie[k]) || (k ? piuFrequente(zoneUltima[k.split(' ').pop()]) : '') || ''; };
+  const zonaCasaTxt = zonaDiVia(v.via);
+  const tabellaGruppi = (lista, viaDi, riga, nCol, titoloDi) => {
+    const gr = {};
+    lista.forEach(x => { const z = (titoloDi && zonaDaTitolo(titoloDi(x))) || zonaDiVia(viaDi(x)) || ''; (gr[z] = gr[z] || []).push(x); });
+    const chiavi = Object.keys(gr).sort((x, y) => (y === zonaCasaTxt) - (x === zonaCasaTxt) || (!x) - (!y) || gr[y].length - gr[x].length);
+    return chiavi.map(z => `<tr class="grp"><td colspan="${nCol}">${esc(titoloComune)}${z ? ' · ' + esc(z) : ' · altre vie'}${z && z === zonaCasaTxt ? ' <span>stessa zona</span>' : ''}</td></tr>` + gr[z].map(riga).join('')).join('');
+  };
   /* ---------- comparabili: stessa tipologia, superficie vicina */
   const viaNorm = rvNorm(v.via).replace(/^(via|viale|piazza|corso|vicolo|largo)\s+/, '');
   let cand = stessaCat.length >= 3 ? stessaCat : attivi;
@@ -18671,13 +18688,13 @@ async function costruisciReportValutazione(id) {
 
   /* ---------- il nostro venduto */
   const prezzoChiuso = {};
-  proposte.forEach(p => { if (p.incaricoUfficio && rvNum(p.prezzoProposta) > 0) prezzoChiuso[String(p.incaricoUfficio).trim().toUpperCase()] = { chiuso: rvNum(p.prezzoProposta), richiesto: rvNum(p.prezzoIncarico) }; });
-  transazioni.forEach(tr => { const k = String(tr.incaricoUfficio || '').trim().toUpperCase(); if (k && rvNum(tr.prezzoVendita) > 0) prezzoChiuso[k] = Object.assign(prezzoChiuso[k] || {}, { chiuso: rvNum(tr.prezzoVendita) }); });
+  proposte.forEach(p => { if (p.incaricoUfficio && rvNum(p.prezzoProposta) > 0) prezzoChiuso[String(p.incaricoUfficio).trim().toUpperCase()] = { chiuso: rvNum(p.prezzoProposta), richiesto: rvNum(p.prezzoIncarico), data: rvIso(p.dataPresaProposta) }; });
+  transazioni.forEach(tr => { const k = String(tr.incaricoUfficio || '').trim().toUpperCase(); if (k && rvNum(tr.prezzoVendita) > 0) prezzoChiuso[k] = Object.assign(prezzoChiuso[k] || {}, { chiuso: rvNum(tr.prezzoVendita) }, rvIso(tr.dataRogito) ? { data: rvIso(tr.dataRogito) } : {}); });
   const vendutiForte = incarichi.map(i => {
     const k = String(i.idElemento || '').trim().toUpperCase();
     const pc = prezzoChiuso[k] || {};
     const richiesto = rvNum(i.prezzoIncarico) || pc.richiesto || 0;
-    return { ...i, richiesto, chiuso: pc.chiuso || 0, mqN: rvNum(i.mq), inComune: rvNorm(i.comune) === cc || rvNorm(i.nome).includes(cc) };
+    return { ...i, richiesto, chiuso: pc.chiuso || 0, dataVendita: pc.data || '', mqN: rvNum(i.mq), inComune: i.comune ? rvNorm(i.comune) === cc : (rvNorm(i.nome) + ' ').startsWith(cc + ' ') };
   });
   const sconti = vendutiForte.filter(x => x.chiuso && x.richiesto && x.chiuso <= x.richiesto * 1.05 && x.chiuso >= x.richiesto * 0.7).map(x => (x.chiuso / x.richiesto - 1) * 100);
   const scontoMedio = sconti.length >= 3 ? rvMediana(sconti) : -5;
@@ -18966,60 +18983,11 @@ async function costruisciReportValutazione(id) {
   }
 
   /* 9. Il venduto */
-  sezioni.push(parte('2', `Quanto vale ${laCasa}`, `Cosa si è venduto davvero, le case in concorrenza diretta e i metodi che usiamo per arrivare al valore.`));
-  if (ritirati.length >= 3 || vendutiQui.length || ntn.length) {
-    let intro = '';
-    let corpo = '';
-    const tiles = [];
-    if (ritirati.length >= 3) {
-      intro += `Negli ultimi mesi <b>${n(ritirati.length)} annunci</b> sono usciti dal mercato a ${esc(titoloComune)}: nella maggior parte dei casi sono case vendute. Il loro ultimo prezzo richiesto era in mediana di <b>${n(ppmRit)} €/m²</b>`;
-      intro += ppmComune ? (ppmRit < ppmComune * 0.98 ? `, più basso degli annunci ancora in vendita (${n(ppmComune)} €/m²): è il prezzo che il mercato ha accettato.` : `, in linea con gli annunci ancora in vendita (${n(ppmComune)} €/m²).`) : '.';
-      tiles.push(zs(n(ritirati.length), 'annunci usciti<br>dal mercato'));
-      tiles.push(zs(n(ppmRit) + ' €/m²', 'ultimo prezzo richiesto<br>(mediana)'));
-      if (ritCat.length >= 3) tiles.push(zs(n(ppmRitCat) + ' €/m²', categoria.toLowerCase() + '<br>' + ritCat.length + ' usciti'));
-      if (giorni.length >= 5) tiles.push(zs(n(rvMediana(giorni)) + ' giorni', 'tempo mediano<br>online (osservato)'));
-    }
-    if (sconti.length >= 3) {
-      intro += ` Nelle vendite chiuse da Forte Immobiliare la trattativa media è stata del <b>${rvPct(scontoMedio, 1)}</b> rispetto al prezzo richiesto.`;
-      tiles.push(zs(rvPct(scontoMedio, 1), `trattativa media<br>${sconti.length} vendite Forte`));
-    }
-    if (tiles.length) corpo += `<div class="kpi">${tiles.join('')}</div>`;
-    if (vendutiQui.length) {
-      const righe = vendutiQui.slice(0, 8).map(x => `<tr><td>${esc(x.nome || [x.via, x.civico].filter(Boolean).join(' '))}</td><td class="num">${x.mqN ? n(x.mqN) : '–'}</td><td class="num">${x.richiesto ? n(x.richiesto) + ' €' : '–'}</td><td class="num">${x.chiuso ? n(x.chiuso) + ' €' : '–'}</td><td class="num">${x.chiuso && x.mqN ? n(x.chiuso / x.mqN) : (x.richiesto && x.mqN ? n(x.richiesto / x.mqN) : '–')}</td></tr>`).join('');
-      corpo += `<div class="sub">Vendute da Forte Immobiliare a ${esc(titoloComune)}</div><div class="tbl-scroll"><table><thead><tr><th>Immobile</th><th class="num">m²</th><th class="num">Richiesto</th><th class="num">Venduto</th><th class="num">€/m²</th></tr></thead><tbody>${righe}</tbody></table></div>`;
-      corpo += `<p class="tabnote">Dove manca il prezzo di vendita è indicato il prezzo richiesto nell'incarico.</p>`;
-    }
-    if (ritirati.length >= 3) {
-      const pp = ritirati.map(r => [r.ppm, attivi.length ? 1 : 0]);
-      const confronto = [['Annunci in vendita', `${attivi.length} annunci`, ppmComune, false], ['Usciti dal mercato', `${ritirati.length} annunci`, ppmRit, true]];
-      if (ritCat.length >= 3 && stessaCat.length >= 3) { confronto.push([`${categoria} in vendita`, `${stessaCat.length} annunci`, ppmCat, false]); confronto.push([`${categoria} usciti`, `${ritCat.length} annunci`, ppmRitCat, true]); }
-      corpo += ch(RV.barreH(confronto, Math.max(...confronto.map(x => x[2])) * 1.2, { fmt: x => n(x) + ' €/m²' }), 'Prezzo mediano al m²: in vendita e usciti dal mercato', void pp);
-    }
-    if (ntn.length >= 2) {
-      const anni = ntn.map(x => String(x.anno)), vals = ntn.map(x => rvNum(x.ntn));
-      corpo += ch(RV.colonne(anni.map((a, i) => [a, vals[i], i === anni.length - 1]), Math.max(...vals) * 1.2, { h: 210, titoloAsse: 'Compravendite residenziali normalizzate (NTN) per anno' }), 'Compravendite registrate (Agenzia delle Entrate)');
-      intro += ` Secondo l'Agenzia delle Entrate nel ${anni[anni.length - 1]} a ${esc(titoloComune)} sono state registrate <b>${n(vals[vals.length - 1])}</b> compravendite residenziali.`;
-      fonti.push(`Agenzia delle Entrate — OMI, volumi di compravendita (NTN) di ${esc(titoloComune)}`);
-    }
-    sezioni.push(card('Cosa si è venduto', intro, corpo, 'lunga'));
-  }
-
-  /* 9b. Case di confronto scelte dal consulente */
-  if (scVend.length) {
-    const riga = c => `<tr><td>${c.link ? `<a class="clink" href="${esc(c.link)}" target="_blank" rel="noopener">` : ''}${esc([c.via, c.civico].filter(Boolean).join(' '))}${c.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(c.p)} €</td><td class="num">${n(c.m)}</td><td class="num">${n(Math.round(c.ppm))}</td></tr>`;
-    const tab = (L, tit) => `<div class="sub">${tit}</div><div class="tbl-scroll"><table><thead><tr><th>Immobile</th><th class="num">Prezzo</th><th class="num">m²</th><th class="num">€/m²</th></tr></thead><tbody>${L.map(riga).join('')}</tbody></table></div>`;
-    const fascia = L => L.length ? `${n(Math.round(Math.min(...L.map(c => c.ppm))))}–${n(Math.round(Math.max(...L.map(c => c.ppm))))} €/m²` : '';
-    let intro = `Cosa si è venduto davvero vicino a ${laCasa}: le compravendite più simili per zona e dimensione, con i prezzi dichiarati negli atti all'<b>Agenzia delle Entrate</b>.`;
-    intro += ` Le <b>${scVend.length} vendite</b> sono state chiuse tra <b>${fascia(scVend)}</b>.`;
-    if (valPpm) intro += ` ${laCasa.charAt(0).toUpperCase() + laCasa.slice(1)} è valutato circa <b>${n(rvTondo(valPpm, 10))} €/m²</b>.`;
-    sezioni.push(card('Compravenduti in zona · Agenzia delle Entrate', intro,
-      tab(scVend, 'Compravendite vicino a ' + laCasa) + `<p class="tabnote">Prezzi effettivi di vendita dichiarati negli atti notarili (Agenzia delle Entrate – OMI, valori immobiliari dichiarati). Superfici e indirizzi come riportati negli atti.</p>`));
-    fonti.push('Agenzia delle Entrate — OMI, valori immobiliari dichiarati negli atti di compravendita (selezione del consulente)');
-  }
-
+  sezioni.push(parte('2', `Quanto vale ${laCasa}`, `Le case in concorrenza diretta, cosa si è venduto davvero e i metodi che usiamo per arrivare al valore.`));
   /* 10. Comparabili */
   if (compsUsati.length) {
-    const righe = compsUsati.map(r => `<tr><td>${r.link ? `<a class="clink" href="${esc(r.link)}" target="_blank" rel="noopener">` : ''}${esc(r.titolo || [r.via, r.civico].filter(Boolean).join(' '))}${r.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(r.p)} €</td><td class="num">${n(r.m)}</td><td class="num">${n(r.ppm)}</td></tr>`).join('');
+    const rigaC = r => `<tr><td>${r.link ? `<a class="clink" href="${esc(r.link)}" target="_blank" rel="noopener">` : ''}${esc(r.titolo || [r.via, r.civico].filter(Boolean).join(' '))}${r.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(r.p)} €</td><td class="num">${n(r.m)}</td><td class="num">${n(r.ppm)}</td></tr>`;
+    const righe = tabellaGruppi(compsUsati, r => r.via, rigaC, 4, r => r.titolo);
     const pp = compsUsati.map(r => r.ppm);
     sezioni.push(card('Comparabili in vendita',
       `Gli annunci più simili a ${laCasa} per tipologia e superficie sono proposti tra <b>${n(Math.min(...pp))} e ${n(Math.max(...pp))} €/m²</b>. I metri quadri sono quelli dichiarati negli annunci.`,
@@ -19044,6 +19012,63 @@ async function costruisciReportValutazione(id) {
         `Il confronto più diretto è sul prezzo totale. Con il valore più probabile di <b>${euro(vCons)}</b>, ${laCasa} si colloca ${items.findIndex(x => x[3]) === 0 ? 'sotto tutti i comparabili' : items.findIndex(x => x[3]) === items.length - 1 ? 'sopra tutti i comparabili' : 'in mezzo ai comparabili'}.`,
         ch(RV.barreH(items, Math.max(...items.map(x => x[2])) * 1.18, { fmt: x => n(rvTondo(x, 1000)) + ' €', lw: 210, hRiga: 40, titoloAsse: 'Prezzo richiesto' }))));
     }
+  }
+
+  /* 9b. Case di confronto scelte dal consulente */
+  if (scVend.length) {
+    const riga = c => `<tr><td>${c.link ? `<a class="clink" href="${esc(c.link)}" target="_blank" rel="noopener">` : ''}${esc([c.via, c.civico].filter(Boolean).join(' '))}${c.link ? ' <span class="ext">&#8599;</span></a>' : ''}</td><td class="num">${n(c.p)} €</td><td class="num">${n(c.m)}</td><td class="num">${n(Math.round(c.ppm))}</td></tr>`;
+    const tab = (L, tit) => `<div class="sub">${tit}</div><div class="tbl-scroll"><table><thead><tr><th>Immobile</th><th class="num">Prezzo</th><th class="num">m²</th><th class="num">€/m²</th></tr></thead><tbody>${tabellaGruppi(L, c => c.via, riga, 4)}</tbody></table></div>`;
+    const fascia = L => L.length ? `${n(Math.round(Math.min(...L.map(c => c.ppm))))}–${n(Math.round(Math.max(...L.map(c => c.ppm))))} €/m²` : '';
+    let intro = `Cosa si è venduto davvero vicino a ${laCasa}: le compravendite più simili per zona e dimensione, con i prezzi dichiarati negli atti all'<b>Agenzia delle Entrate</b>.`;
+    intro += ` Le <b>${scVend.length} vendite</b> sono state chiuse tra <b>${fascia(scVend)}</b>.`;
+    if (valPpm) intro += ` ${laCasa.charAt(0).toUpperCase() + laCasa.slice(1)} è valutato circa <b>${n(rvTondo(valPpm, 10))} €/m²</b>.`;
+    sezioni.push(card('Compravenduti in zona · Agenzia delle Entrate', intro,
+      tab(scVend, 'Compravendite vicino a ' + laCasa) + `<p class="tabnote">Prezzi effettivi di vendita dichiarati negli atti notarili (Agenzia delle Entrate – OMI, valori immobiliari dichiarati). Superfici e indirizzi come riportati negli atti.</p>`));
+    fonti.push('Agenzia delle Entrate — OMI, valori immobiliari dichiarati negli atti di compravendita (selezione del consulente)');
+  }
+
+  /* 9c. Le ultime vendite di Forte Immobiliare nel comune (solo se ce ne sono) */
+  if (vendutiQui.length) {
+    const ultimi = vendutiQui.slice().sort((x, y) => (y.dataVendita || '').localeCompare(x.dataVendita || '') || (parseInt(String(y.idElemento || '').replace(/\D/g, '')) || 0) - (parseInt(String(x.idElemento || '').replace(/\D/g, '')) || 0)).slice(0, 10);
+    const conMq = ultimi.some(x => x.mqN), conChiuso = ultimi.some(x => x.chiuso);
+    const riga = x => `<tr><td>${esc([x.via, x.civico].filter(Boolean).join(' ') || String(x.nome || '').replace(new RegExp('^' + titoloComune + '\\s+', 'i'), ''))}</td>${conMq ? `<td class="num">${x.mqN ? n(x.mqN) : '–'}</td>` : ''}<td class="num">${x.richiesto ? n(x.richiesto) + ' €' : '–'}</td>${conChiuso ? `<td class="num">${x.chiuso ? n(x.chiuso) + ' €' : '–'}</td>` : ''}</tr>`;
+    const nCol = 2 + (conMq ? 1 : 0) + (conChiuso ? 1 : 0);
+    const testa = `<tr><th>Immobile</th>${conMq ? '<th class="num">m²</th>' : ''}<th class="num">Prezzo incarico</th>${conChiuso ? '<th class="num">Venduto</th>' : ''}</tr>`;
+    sezioni.push(card(`Le ultime vendite di Forte Immobiliare a ${esc(titoloComune)}`,
+      `${ultimi.length === 1 ? "L'ultima casa venduta" : `Le ultime <b>${ultimi.length}</b> case vendute`} dalla nostra agenzia a ${esc(titoloComune)}, divise per zona.`,
+      `<div class="tbl-scroll"><table><thead>${testa}</thead><tbody>${tabellaGruppi(ultimi, x => x.via || String(x.nome || '').replace(new RegExp('^' + titoloComune + '\\s+', 'i'), ''), riga, nCol)}</tbody></table></div>`));
+  }
+
+  if (ritirati.length >= 3 || ntn.length) {
+    let intro = '';
+    let corpo = '';
+    const tiles = [];
+    if (ritirati.length >= 3) {
+      intro += `Negli ultimi mesi <b>${n(ritirati.length)} annunci</b> sono usciti dal mercato a ${esc(titoloComune)}: nella maggior parte dei casi sono case vendute. Il loro ultimo prezzo richiesto era in mediana di <b>${n(ppmRit)} €/m²</b>`;
+      intro += ppmComune ? (ppmRit < ppmComune * 0.98 ? `, più basso degli annunci ancora in vendita (${n(ppmComune)} €/m²): è il prezzo che il mercato ha accettato.` : `, in linea con gli annunci ancora in vendita (${n(ppmComune)} €/m²).`) : '.';
+      tiles.push(zs(n(ritirati.length), 'annunci usciti<br>dal mercato'));
+      tiles.push(zs(n(ppmRit) + ' €/m²', 'ultimo prezzo richiesto<br>(mediana)'));
+      if (ritCat.length >= 3) tiles.push(zs(n(ppmRitCat) + ' €/m²', categoria.toLowerCase() + '<br>' + ritCat.length + ' usciti'));
+      if (giorni.length >= 5) tiles.push(zs(n(rvMediana(giorni)) + ' giorni', 'tempo mediano<br>online (osservato)'));
+    }
+    if (sconti.length >= 3) {
+      intro += ` Nelle vendite chiuse da Forte Immobiliare la trattativa media è stata del <b>${rvPct(scontoMedio, 1)}</b> rispetto al prezzo richiesto.`;
+      tiles.push(zs(rvPct(scontoMedio, 1), `trattativa media<br>${sconti.length} vendite Forte`));
+    }
+    if (tiles.length) corpo += `<div class="kpi">${tiles.join('')}</div>`;
+    if (ritirati.length >= 3) {
+      const pp = ritirati.map(r => [r.ppm, attivi.length ? 1 : 0]);
+      const confronto = [['Annunci in vendita', `${attivi.length} annunci`, ppmComune, false], ['Usciti dal mercato', `${ritirati.length} annunci`, ppmRit, true]];
+      if (ritCat.length >= 3 && stessaCat.length >= 3) { confronto.push([`${categoria} in vendita`, `${stessaCat.length} annunci`, ppmCat, false]); confronto.push([`${categoria} usciti`, `${ritCat.length} annunci`, ppmRitCat, true]); }
+      corpo += ch(RV.barreH(confronto, Math.max(...confronto.map(x => x[2])) * 1.2, { fmt: x => n(x) + ' €/m²' }), 'Prezzo mediano al m²: in vendita e usciti dal mercato', void pp);
+    }
+    if (ntn.length >= 2) {
+      const anni = ntn.map(x => String(x.anno)), vals = ntn.map(x => rvNum(x.ntn));
+      corpo += ch(RV.colonne(anni.map((a, i) => [a, vals[i], i === anni.length - 1]), Math.max(...vals) * 1.2, { h: 210, titoloAsse: 'Compravendite residenziali normalizzate (NTN) per anno' }), 'Compravendite registrate (Agenzia delle Entrate)');
+      intro += ` Secondo l'Agenzia delle Entrate nel ${anni[anni.length - 1]} a ${esc(titoloComune)} sono state registrate <b>${n(vals[vals.length - 1])}</b> compravendite residenziali.`;
+      fonti.push(`Agenzia delle Entrate — OMI, volumi di compravendita (NTN) di ${esc(titoloComune)}`);
+    }
+    sezioni.push(card('Usciti dal mercato', intro, corpo, 'lunga'));
   }
 
   /* 11. Metodo */
@@ -19478,6 +19503,8 @@ const RV_CSS = `<style>
   tbody tr.spicca{background:rgba(198,167,119,.14)}
   td b{color:var(--pet)}
   .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  tr.grp td{background:#f3ede1;color:var(--pet);font-weight:800;font-size:11px;letter-spacing:.6px;text-transform:uppercase;padding:7px 10px}
+  tr.grp td span{background:var(--oro);color:#fff;border-radius:6px;padding:2px 6px;margin-left:6px;font-size:9.5px;letter-spacing:.4px}
   .tabnote{font-size:12.5px;color:var(--mut);margin-top:10px;line-height:1.6}
   .valuta{background:linear-gradient(180deg,var(--pet),#0e2a35);color:#eaf2f5;border-radius:18px;padding:26px;margin-top:16px;box-shadow:0 10px 30px rgba(11,59,74,.20)}
   .valuta h2{color:var(--oro2)}
