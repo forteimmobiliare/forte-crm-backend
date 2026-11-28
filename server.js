@@ -4682,7 +4682,8 @@ const OpenHouseSchema = new mongoose.Schema({
   attivita: { type: Object, default: {} },          // quali promozioni sono state fatte
   partecipanti: { type: [String], default: [] },    // username dei consulenti presenti SENZA orari propri: invitati dall'organizzatore o che hanno confermato da soli
   invitoCalendarioA: { type: [String], default: [] }, // partecipanti a cui è già partito l'invito Google Calendar (per non rimandarlo)
-  invitati: { type: Array, default: [] }            // richieste invitate via WhatsApp: [{ bdId, il, da }]
+  invitati: { type: Array, default: [] },           // richieste invitate via WhatsApp: [{ bdId, il, da }]
+  riempiInOrdine: { type: Boolean, default: false }  // true = i calendari dei consulenti extra si aprono solo quando quelli prima sono pieni
 }, { timestamps: true });
 const OpenHouse = mongoose.model('OpenHouse', OpenHouseSchema);
 
@@ -5090,6 +5091,22 @@ async function elencoConsulentiOH(oh) {
 }
 
 // Info dell'evento Casa Forte + slot già presi (per disabilitarli nel form pubblico).
+/* riempiInOrdine: il cliente vede il calendario del consulente successivo solo
+   quando tutti gli orari di quelli prima sono presi (es. prima Orazio, poi Alessandro). */
+function consulentiVisibiliOH(oh, consulenti, prese) {
+  if (!oh || !oh.riempiInOrdine || consulenti.length < 2) return consulenti;
+  const m = String(oh.orario || '').match(/(\d{1,2})[:.](\d{2})\s*-\s*(\d{1,2})[:.](\d{2})/);
+  if (!m) return consulenti;
+  const ini = (+m[1]) * 60 + (+m[2]), fine = (+m[3]) * 60 + (+m[4]), step = Number(oh.durataSlot) || 20;
+  const out = [];
+  for (const c of consulenti) {
+    out.push(c);
+    let tot = 0; for (let t = ini + (c.offset || 0); t + step <= fine; t += step) tot++;
+    const presi = prese.filter(p => (p.consulente || oh.consulente || '') === c.utente).length;
+    if (presi < tot) break;   // questo consulente ha ancora orari liberi: i successivi restano chiusi
+  }
+  return out;
+}
 /* Le schede degli immobili di un evento su più immobili: tipologia, prezzo, mq,
    locali e indirizzo, così il cliente sceglie sapendo cosa sceglie. */
 async function schedeImmobiliOH(oh) {
@@ -5115,7 +5132,7 @@ app.get('/api/pubblico/openhouse-prenota/:id', async (req, res) => {
     const oh = await OpenHouse.findById(req.params.id);
     if (!oh) return res.status(404).json({ error: 'Evento Casa Forte non trovato' });
     const prese = await PrenotazioneOpenHouse.find({ openHouseId: String(oh._id), stato: { $nin: ['Annullato', 'Saltato'] } });
-    const consulenti = await elencoConsulentiOH(oh);
+    const consulenti = consulentiVisibiliOH(oh, await elencoConsulentiOH(oh), prese);
     const immobiliExtra = (Array.isArray(oh.immobiliExtra) ? oh.immobiliExtra : [])
       .filter(x => x && (x.immobile || x.incaricoUfficio))
       .map(x => ({ incaricoUfficio: x.incaricoUfficio || '', immobile: x.immobile || '' }));
@@ -5141,7 +5158,7 @@ app.get('/api/pubblico/openhouse-immobile/:incarico', async (req, res) => {
     const eventi = [];
     for (const oh of ohs) {
       const prese = await PrenotazioneOpenHouse.find({ openHouseId: String(oh._id), stato: { $nin: ['Annullato', 'Saltato'] } });
-      const consulenti = await elencoConsulentiOH(oh);
+      const consulenti = consulentiVisibiliOH(oh, await elencoConsulentiOH(oh), prese);
       const immobiliExtra = (Array.isArray(oh.immobiliExtra) ? oh.immobiliExtra : [])
         .filter(x => x && (x.immobile || x.incaricoUfficio))
         .map(x => ({ incaricoUfficio: x.incaricoUfficio || '', immobile: x.immobile || '' }));
